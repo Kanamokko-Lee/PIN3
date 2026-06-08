@@ -189,6 +189,18 @@
     #sidebar.open { display: flex; position: fixed; inset: 48px 0 0 0; z-index: 50; width: 280px; box-shadow: 2px 0 12px rgba(0,0,0,0.15); }
     #btn-menu { display: flex !important; }
     #sidebar-overlay { display: block; position: fixed; inset: 48px 0 0 0; background: rgba(0,0,0,0.3); z-index: 49; }
+    /* iPhoneでエディタ縦サイズを画面内に収める */
+    #app { height: 100dvh; overflow: hidden; }
+    .rich-editor { font-size: 16px; }
+    /* ツールバーを小さく */
+    .editor-toolbar { padding: 4px 8px; gap: 1px; }
+    .tb-btn { padding: 3px 6px; font-size: 11px; }
+    .tb-select { font-size: 11px; height: 24px; }
+    /* フッターをコンパクトに */
+    #editor-footer { padding: 6px 12px; gap: 6px; flex-wrap: wrap; }
+    #save-status { display: none; }
+    /* METAセクションを2列に */
+    #meta-section { grid-template-columns: 1fr 1fr; padding: 10px 12px; gap: 8px; }
   }
 </style>
 </head>
@@ -203,6 +215,7 @@
     </div>
     <div id="header-controls">
       <span id="gist-status-dot" style="width:8px;height:8px;border-radius:50%;background:#666;display:inline-block;" title="Gist未接続"></span>
+      <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-reload" title="Gistから再読み込み">↺</button>
       <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-settings">⚙ GIST</button>
       <button class="btn btn-primary btn-sm" id="btn-sync-all">↑ SYNC ALL</button>
       <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-new">+ NEW</button>
@@ -351,6 +364,11 @@
                     <option value="18">18</option>
                     <option value="20">20</option>
                     <option value="24">24</option>
+                    <option value="28">28</option>
+                    <option value="32">32</option>
+                    <option value="36">36</option>
+                    <option value="40">40</option>
+                    <option value="48">48</option>
                   </select>
                   <div class="tb-sep"></div>
                   <button class="tb-btn" data-cmd="insertUnorderedList" data-target="watch">• LIST</button>
@@ -390,6 +408,7 @@
           <!-- FOOTER -->
           <div id="editor-footer">
             <span id="save-status">未保存の変更はありません</span>
+            <button class="btn btn-ghost btn-sm" id="btn-undo" title="⌘Z">↩ UNDO</button>
             <button class="btn btn-ghost btn-sm" id="btn-revert">REVERT</button>
             <button class="btn btn-primary btn-sm" id="btn-save-local">SAVE LOCAL</button>
             <button class="btn btn-primary" id="btn-save-gist">↑ SAVE TO GIST</button>
@@ -745,6 +764,45 @@ document.getElementById('apply-highlight-watch').addEventListener('click', () =>
 setupToolbar('toolbar-body', 'editor-body');
 setupToolbar('toolbar-watch', 'editor-watch');
 
+// ══════════════════════════════════════════
+// UNDO 履歴
+// ══════════════════════════════════════════
+const undoHistory = [];  // { bodyHTML, watchHTML } のスタック
+const UNDO_MAX = 50;
+let undoSuppressed = false;
+
+function pushUndoHistory() {
+  if (undoSuppressed) return;
+  undoHistory.push({
+    bodyHTML:  document.getElementById('editor-body').innerHTML,
+    watchHTML: document.getElementById('editor-watch').innerHTML,
+  });
+  if (undoHistory.length > UNDO_MAX) undoHistory.shift();
+}
+
+function performUndo() {
+  if (undoHistory.length === 0) { toast('これ以上戻れません', 'warn'); return; }
+  undoSuppressed = true;
+  const prev = undoHistory.pop();
+  document.getElementById('editor-body').innerHTML  = prev.bodyHTML;
+  document.getElementById('editor-watch').innerHTML = prev.watchHTML;
+  undoSuppressed = false;
+  markDirty();
+  updateWatchPreview();
+  toast('元に戻しました');
+}
+
+// エディタの input のたびに履歴を積む（デバウンスで500ms）
+let undoTimer = null;
+['editor-body', 'editor-watch'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(pushUndoHistory, 500);
+  });
+});
+
+document.getElementById('btn-undo').addEventListener('click', performUndo);
+
 // ── Mac keyboard shortcuts ──
 document.addEventListener('keydown', e => {
   const meta = e.metaKey || e.ctrlKey;
@@ -755,6 +813,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'b') { e.preventDefault(); execCmd('bold'); }
     if (e.key === 'i') { e.preventDefault(); execCmd('italic'); }
     if (e.key === 'u') { e.preventDefault(); execCmd('underline'); }
+    if (e.key === 'z') { e.preventDefault(); performUndo(); }
     if (e.key === 's') { e.preventDefault(); saveLocal(); }
   } else {
     if (e.key === 's') { e.preventDefault(); saveLocal(); }
@@ -1010,8 +1069,13 @@ document.getElementById('airport-list').addEventListener('click', () => {
 document.getElementById('search-input').addEventListener('input', renderList);
 
 // ══════════════════════════════════════════
-// GPS 最寄り空港自動選択
+// RELOAD（Gistから再読み込み）
 // ══════════════════════════════════════════
+document.getElementById('btn-reload').addEventListener('click', async () => {
+  if (!state.token || !state.gistId) { toast('Gistが未設定です', 'warn'); return; }
+  toast('再読み込み中...');
+  await fetchGist();
+});
 function autoSelectNearestAirport(lat, lng) {
   if (!state.airports.length) return;
   let nearest = null;
@@ -1028,6 +1092,7 @@ function autoSelectNearestAirport(lat, lng) {
   if (nearest && minDist <= radius) {
     if (nearest.id !== state.selectedId) {
       selectAirport(nearest.id);
+      showEditorTab('body');
       toast('GPS: ' + nearest.id + ' を自動選択');
     }
   }
@@ -1042,35 +1107,34 @@ function autoSelectNearestAirport(lat, lng) {
   const isIOSApp = !!window.PW3Bridge;
 
   if (isIOSApp) {
-    // iOSアプリ上：ネイティブからのコールバック受け口を定義
-    // WebViewController.swift の injectStoredToken() がこれを呼ぶ
     window.PW3_injectCredentials = function(token, gistId) {
       state.token = token;
       state.gistId = gistId;
       localStorage.setItem('pw3_token', token);
       localStorage.setItem('pw3_gist_id', gistId);
       updateGistDot();
-      fetchGist();
+      fetchGist().then(() => {
+        if (state.selectedId) showEditorTab('body');
+      });
     };
 
-    // GPS位置情報受け取り（LocationManager が位置更新のたびに呼ぶ）
     window.PW3_onLocation = function(pos) {
       autoSelectNearestAirport(pos.lat, pos.lng);
     };
 
-    // ローカルキャッシュがあれば先に表示しておく（Gist読込前の表示用）
     const local = localStorage.getItem('pw3_local');
     if (local) {
       try {
         state.airports = JSON.parse(local);
         renderList();
-        if (state.airports.length > 0) selectAirport(state.airports[0].id);
+        if (state.airports.length > 0) {
+          selectAirport(state.airports[0].id);
+          showEditorTab('body');
+        }
       } catch(e) {}
     }
-    // トークンはネイティブからの injectCredentials を待つ（自動で呼ばれる）
 
   } else {
-    // Mac / ブラウザ：従来通り localStorage から
     const local = localStorage.getItem('pw3_local');
     if (local) {
       try {
