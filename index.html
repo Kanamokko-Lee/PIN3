@@ -186,7 +186,9 @@
   @media (max-width: 640px) {
     #main { grid-template-columns: 1fr; }
     #sidebar { display: none; }
-    #sidebar.open { display: flex; position: fixed; inset: 48px 0 0 0; z-index: 50; width: 280px; }
+    #sidebar.open { display: flex; position: fixed; inset: 48px 0 0 0; z-index: 50; width: 280px; box-shadow: 2px 0 12px rgba(0,0,0,0.15); }
+    #btn-menu { display: flex !important; }
+    #sidebar-overlay { display: block; position: fixed; inset: 48px 0 0 0; background: rgba(0,0,0,0.3); z-index: 49; }
   }
 </style>
 </head>
@@ -195,7 +197,10 @@
 
   <!-- HEADER -->
   <header id="header">
-    <h1>PINWATCH <span style="opacity:0.5;font-weight:300">3</span></h1>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <button id="btn-menu" class="btn btn-ghost btn-icon" style="color:#aaa;border-color:#444;display:none;font-size:16px;padding:4px 8px;">☰</button>
+      <h1>PINWATCH <span style="opacity:0.5;font-weight:300">3</span></h1>
+    </div>
     <div id="header-controls">
       <span id="gist-status-dot" style="width:8px;height:8px;border-radius:50%;background:#666;display:inline-block;" title="Gist未接続"></span>
       <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-settings">⚙ GIST</button>
@@ -395,6 +400,9 @@
     </main>
   </div>
 </div>
+
+<!-- SIDEBAR OVERLAY (mobile) -->
+<div id="sidebar-overlay" style="display:none;" onclick="closeSidebar()"></div>
 
 <!-- GIST SETTINGS MODAL -->
 <div class="modal-overlay hidden" id="modal-settings">
@@ -881,6 +889,10 @@ async function syncToGist() {
     if (!res.ok) throw new Error(res.status);
     toast('Gistに同期しました (' + state.airports.length + ' airports)');
     localStorage.setItem('pw3_local', content);
+    // iOSアプリ上ではWatchにも転送
+    if (window.PW3Bridge) {
+      window.PW3Bridge.syncWatch(content, state.selectedId || '');
+    }
   } catch(e) {
     toast('Gist同期失敗: ' + e.message, 'err');
   }
@@ -960,9 +972,36 @@ document.getElementById('modal-save-settings').addEventListener('click', async (
   state.gistId = document.getElementById('modal-gist-id').value.trim();
   localStorage.setItem('pw3_token', state.token);
   localStorage.setItem('pw3_gist_id', state.gistId);
+  // iOSアプリ上ではKeychainにも保存
+  if (window.PW3Bridge) {
+    window.PW3Bridge.saveToken(state.token, state.gistId);
+  }
   document.getElementById('modal-settings').classList.add('hidden');
   updateGistDot();
   await fetchGist();
+});
+
+// ══════════════════════════════════════════
+// HAMBURGER MENU (mobile)
+// ══════════════════════════════════════════
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-overlay').style.display = 'block';
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').style.display = 'none';
+}
+document.getElementById('btn-menu').addEventListener('click', () => {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+});
+
+// 空港選択時にサイドバーを閉じる（モバイルのみ）
+const _origSelectAirport = selectAirport;
+// selectAirport は既に定義済みなので、リスト項目クリック後に閉じる処理を追加
+document.getElementById('airport-list').addEventListener('click', () => {
+  if (window.innerWidth <= 640) closeSidebar();
 });
 
 // ══════════════════════════════════════════
@@ -971,25 +1010,79 @@ document.getElementById('modal-save-settings').addEventListener('click', async (
 document.getElementById('search-input').addEventListener('input', renderList);
 
 // ══════════════════════════════════════════
+// GPS 最寄り空港自動選択
+// ══════════════════════════════════════════
+function autoSelectNearestAirport(lat, lng) {
+  if (!state.airports.length) return;
+  let nearest = null;
+  let minDist = Infinity;
+  state.airports.forEach(a => {
+    if (!a.lat || !a.lng) return;
+    const d = Math.sqrt(
+      Math.pow((a.lat - lat) * 111, 2) +
+      Math.pow((a.lng - lng) * 111 * Math.cos(lat * Math.PI / 180), 2)
+    );
+    if (d < minDist) { minDist = d; nearest = a; }
+  });
+  const radius = nearest?.radiusKm ?? 2.0;
+  if (nearest && minDist <= radius) {
+    if (nearest.id !== state.selectedId) {
+      selectAirport(nearest.id);
+      toast('GPS: ' + nearest.id + ' を自動選択');
+    }
+  }
+}
+
+// ══════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════
 (function init() {
   updateGistDot();
 
-  // load local cache
-  const local = localStorage.getItem('pw3_local');
-  if (local) {
-    try {
-      state.airports = JSON.parse(local);
-      renderList();
-      if (state.airports.length > 0) selectAirport(state.airports[0].id);
-      toast('ローカルキャッシュを読み込みました');
-    } catch(e) {}
-  }
+  const isIOSApp = !!window.PW3Bridge;
 
-  // if gist configured, load from gist
-  if (state.token && state.gistId) {
-    fetchGist();
+  if (isIOSApp) {
+    // iOSアプリ上：ネイティブからのコールバック受け口を定義
+    // WebViewController.swift の injectStoredToken() がこれを呼ぶ
+    window.PW3_injectCredentials = function(token, gistId) {
+      state.token = token;
+      state.gistId = gistId;
+      localStorage.setItem('pw3_token', token);
+      localStorage.setItem('pw3_gist_id', gistId);
+      updateGistDot();
+      fetchGist();
+    };
+
+    // GPS位置情報受け取り（LocationManager が位置更新のたびに呼ぶ）
+    window.PW3_onLocation = function(pos) {
+      autoSelectNearestAirport(pos.lat, pos.lng);
+    };
+
+    // ローカルキャッシュがあれば先に表示しておく（Gist読込前の表示用）
+    const local = localStorage.getItem('pw3_local');
+    if (local) {
+      try {
+        state.airports = JSON.parse(local);
+        renderList();
+        if (state.airports.length > 0) selectAirport(state.airports[0].id);
+      } catch(e) {}
+    }
+    // トークンはネイティブからの injectCredentials を待つ（自動で呼ばれる）
+
+  } else {
+    // Mac / ブラウザ：従来通り localStorage から
+    const local = localStorage.getItem('pw3_local');
+    if (local) {
+      try {
+        state.airports = JSON.parse(local);
+        renderList();
+        if (state.airports.length > 0) selectAirport(state.airports[0].id);
+        toast('ローカルキャッシュを読み込みました');
+      } catch(e) {}
+    }
+    if (state.token && state.gistId) {
+      fetchGist();
+    }
   }
 })();
 </script>
