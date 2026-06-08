@@ -881,10 +881,6 @@ async function syncToGist() {
     if (!res.ok) throw new Error(res.status);
     toast('Gistに同期しました (' + state.airports.length + ' airports)');
     localStorage.setItem('pw3_local', content);
-    // iOSアプリ上ではWatchにも転送
-    if (window.PW3Bridge) {
-      window.PW3Bridge.syncWatch(content, state.selectedId || '');
-    }
   } catch(e) {
     toast('Gist同期失敗: ' + e.message, 'err');
   }
@@ -964,10 +960,6 @@ document.getElementById('modal-save-settings').addEventListener('click', async (
   state.gistId = document.getElementById('modal-gist-id').value.trim();
   localStorage.setItem('pw3_token', state.token);
   localStorage.setItem('pw3_gist_id', state.gistId);
-  // iOSアプリ上ではKeychainにも保存
-  if (window.PW3Bridge) {
-    window.PW3Bridge.saveToken(state.token, state.gistId);
-  }
   document.getElementById('modal-settings').classList.add('hidden');
   updateGistDot();
   await fetchGist();
@@ -979,79 +971,25 @@ document.getElementById('modal-save-settings').addEventListener('click', async (
 document.getElementById('search-input').addEventListener('input', renderList);
 
 // ══════════════════════════════════════════
-// GPS 最寄り空港自動選択
-// ══════════════════════════════════════════
-function autoSelectNearestAirport(lat, lng) {
-  if (!state.airports.length) return;
-  let nearest = null;
-  let minDist = Infinity;
-  state.airports.forEach(a => {
-    if (!a.lat || !a.lng) return;
-    const d = Math.sqrt(
-      Math.pow((a.lat - lat) * 111, 2) +
-      Math.pow((a.lng - lng) * 111 * Math.cos(lat * Math.PI / 180), 2)
-    );
-    if (d < minDist) { minDist = d; nearest = a; }
-  });
-  const radius = nearest?.radiusKm ?? 2.0;
-  if (nearest && minDist <= radius) {
-    if (nearest.id !== state.selectedId) {
-      selectAirport(nearest.id);
-      toast('GPS: ' + nearest.id + ' を自動選択');
-    }
-  }
-}
-
-// ══════════════════════════════════════════
 // BOOT
 // ══════════════════════════════════════════
 (function init() {
   updateGistDot();
 
-  const isIOSApp = !!window.PW3Bridge;
+  // load local cache
+  const local = localStorage.getItem('pw3_local');
+  if (local) {
+    try {
+      state.airports = JSON.parse(local);
+      renderList();
+      if (state.airports.length > 0) selectAirport(state.airports[0].id);
+      toast('ローカルキャッシュを読み込みました');
+    } catch(e) {}
+  }
 
-  if (isIOSApp) {
-    // iOSアプリ上：ネイティブからのコールバック受け口を定義
-    // WebViewController.swift の injectStoredToken() がこれを呼ぶ
-    window.PW3_injectCredentials = function(token, gistId) {
-      state.token = token;
-      state.gistId = gistId;
-      localStorage.setItem('pw3_token', token);
-      localStorage.setItem('pw3_gist_id', gistId);
-      updateGistDot();
-      fetchGist();
-    };
-
-    // GPS位置情報受け取り（LocationManager が位置更新のたびに呼ぶ）
-    window.PW3_onLocation = function(pos) {
-      autoSelectNearestAirport(pos.lat, pos.lng);
-    };
-
-    // ローカルキャッシュがあれば先に表示しておく（Gist読込前の表示用）
-    const local = localStorage.getItem('pw3_local');
-    if (local) {
-      try {
-        state.airports = JSON.parse(local);
-        renderList();
-        if (state.airports.length > 0) selectAirport(state.airports[0].id);
-      } catch(e) {}
-    }
-    // トークンはネイティブからの injectCredentials を待つ（自動で呼ばれる）
-
-  } else {
-    // Mac / ブラウザ：従来通り localStorage から
-    const local = localStorage.getItem('pw3_local');
-    if (local) {
-      try {
-        state.airports = JSON.parse(local);
-        renderList();
-        if (state.airports.length > 0) selectAirport(state.airports[0].id);
-        toast('ローカルキャッシュを読み込みました');
-      } catch(e) {}
-    }
-    if (state.token && state.gistId) {
-      fetchGist();
-    }
+  // if gist configured, load from gist
+  if (state.token && state.gistId) {
+    fetchGist();
   }
 })();
 </script>
