@@ -592,7 +592,8 @@ function renderEditor() {
 
   // rich editors
   document.getElementById('editor-body').innerHTML = a.body || '';
-  document.getElementById('editor-watch').innerHTML = a.watchBody || '';
+  // watchBodyが空ならbodyをそのままコピー
+  document.getElementById('editor-watch').innerHTML = a.watchBody || a.body || '';
 
   // activate correct tab
   showEditorTab(state.activeTab);
@@ -887,6 +888,59 @@ function collectEditorData() {
 }
 
 // ══════════════════════════════════════════
+// 差分マージ：bodyの変更をwatchBodyに反映
+// ══════════════════════════════════════════
+// 仕組み：
+//   1. 旧body と 新body のテキストノードを比較
+//   2. 変化したテキストを検出
+//   3. watchBodyの中に同じ旧テキストがあれば新テキストに置換
+//   4. watchBodyにない行・削除された行はそのまま放置
+
+function extractTextNodes(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const nodes = [];
+  const walk = (node) => {
+    if (node.nodeType === 3) {
+      const t = node.textContent.trim();
+      if (t) nodes.push(t);
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(tmp);
+  return nodes;
+}
+
+function mergeWatchBody(oldBody, newBody, watchBody) {
+  // 旧・新のテキストノード一覧を取得
+  const oldTexts = extractTextNodes(oldBody);
+  const newTexts = extractTextNodes(newBody);
+
+  // 変化したテキストのペアを収集（長さが同じ範囲で比較）
+  const changes = [];
+  const len = Math.min(oldTexts.length, newTexts.length);
+  for (let i = 0; i < len; i++) {
+    if (oldTexts[i] !== newTexts[i]) {
+      changes.push({ from: oldTexts[i], to: newTexts[i] });
+    }
+  }
+
+  if (changes.length === 0) return watchBody; // 変化なし
+
+  // watchBodyのHTMLを文字列置換
+  let merged = watchBody;
+  changes.forEach(({ from, to }) => {
+    // HTMLエンティティを考慮しながら置換
+    // テキストがHTMLとして含まれている可能性があるためescapeして検索
+    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    merged = merged.replace(new RegExp(escaped, 'g'), to);
+  });
+
+  return merged;
+}
+
+// ══════════════════════════════════════════
 // SAVE LOCAL
 // ══════════════════════════════════════════
 function saveLocal() {
@@ -895,11 +949,28 @@ function saveLocal() {
   const oldId = state.selectedId;
   const idx = state.airports.findIndex(a => a.id === oldId);
   if (idx === -1) return;
+
+  // 差分マージ：旧bodyと新bodyの差分をwatchBodyに反映
+  const oldAirport = state.airports[idx];
+  if (oldAirport.body && data.body !== oldAirport.body) {
+    const mergedWatch = mergeWatchBody(oldAirport.body, data.body, data.watchBody);
+    if (mergedWatch !== data.watchBody) {
+      data.watchBody = mergedWatch;
+      // エディタのwatchBodyも更新
+      document.getElementById('editor-watch').innerHTML = mergedWatch;
+      updateWatchPreview();
+      toast('ローカルに保存しました (' + data.id + ') — Watch同期済み');
+    } else {
+      toast('ローカルに保存しました (' + data.id + ')');
+    }
+  } else {
+    toast('ローカルに保存しました (' + data.id + ')');
+  }
+
   state.airports[idx] = data;
   state.selectedId = data.id;
   setDirty(false);
   renderList();
-  toast('ローカルに保存しました (' + data.id + ')');
   localStorage.setItem('pw3_local', JSON.stringify(state.airports));
 }
 
