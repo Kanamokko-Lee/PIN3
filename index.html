@@ -103,6 +103,8 @@
   .tb-btn:hover { background: var(--c-surface); border-color: var(--c-border); color: var(--c-text); }
   .tb-btn.active { background: var(--c-accent); color: #fff; border-color: var(--c-accent); }
   .tb-sep { width: 1px; height: 18px; background: var(--c-border); margin: 0 4px; }
+  .tb-select { font-family: var(--font-mono); font-size: 12px; padding: 3px 4px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface); color: var(--c-text); cursor: pointer; height: 26px; }
+  .tb-select:focus { outline: none; border-color: var(--c-accent2); }
   .tb-color { display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--c-text2); }
   .tb-color input[type="color"] { width: 22px; height: 22px; border: 1px solid var(--c-border); border-radius: 3px; cursor: pointer; padding: 1px; background: transparent; }
 
@@ -285,9 +287,21 @@
               <button class="tb-btn" data-cmd="italic" title="⌘I"><i>I</i></button>
               <button class="tb-btn" data-cmd="underline" title="⌘U"><u>U</u></button>
               <div class="tb-sep"></div>
-              <button class="tb-btn" data-cmd="h1">H1</button>
-              <button class="tb-btn" data-cmd="h2">H2</button>
-              <button class="tb-btn" data-cmd="h3">H3</button>
+              <select class="tb-select" id="fontsize-body" title="フォントサイズ">
+                <option value="">サイズ</option>
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="13">13</option>
+                <option value="14">14</option>
+                <option value="16">16</option>
+                <option value="18">18</option>
+                <option value="20">20</option>
+                <option value="24">24</option>
+                <option value="28">28</option>
+                <option value="32">32</option>
+                <option value="36">36</option>
+              </select>
               <div class="tb-sep"></div>
               <button class="tb-btn" data-cmd="insertUnorderedList">• LIST</button>
               <button class="tb-btn" data-cmd="insertOrderedList">1. LIST</button>
@@ -296,9 +310,15 @@
               <button class="tb-btn" data-cmd="insertHR" title="区切り線">HR</button>
               <div class="tb-sep"></div>
               <div class="tb-color">
-                <span>COLOR</span>
+                <span>文字色</span>
                 <input type="color" id="color-picker-body" value="#1a3a5c" title="文字色">
                 <button class="tb-btn" id="apply-color-body" title="選択テキストに色を適用">▸</button>
+              </div>
+              <div class="tb-sep"></div>
+              <div class="tb-color">
+                <span>塗り</span>
+                <input type="color" id="highlight-picker-body" value="#fff176" title="ハイライト色">
+                <button class="tb-btn" id="apply-highlight-body" title="選択テキストをハイライト">▸</button>
               </div>
               <div class="tb-sep"></div>
               <button class="tb-btn" data-cmd="removeFormat" title="書式クリア">CLR</button>
@@ -315,15 +335,31 @@
                   <button class="tb-btn" data-cmd="italic" data-target="watch"><i>I</i></button>
                   <button class="tb-btn" data-cmd="underline" data-target="watch"><u>U</u></button>
                   <div class="tb-sep"></div>
-                  <button class="tb-btn" data-cmd="h2" data-target="watch">H2</button>
-                  <button class="tb-btn" data-cmd="h3" data-target="watch">H3</button>
+                  <select class="tb-select" id="fontsize-watch" title="フォントサイズ">
+                    <option value="">サイズ</option>
+                    <option value="10">10</option>
+                    <option value="11">11</option>
+                    <option value="12">12</option>
+                    <option value="13">13</option>
+                    <option value="14">14</option>
+                    <option value="16">16</option>
+                    <option value="18">18</option>
+                    <option value="20">20</option>
+                    <option value="24">24</option>
+                  </select>
                   <div class="tb-sep"></div>
                   <button class="tb-btn" data-cmd="insertUnorderedList" data-target="watch">• LIST</button>
                   <div class="tb-sep"></div>
                   <div class="tb-color">
-                    <span>COLOR</span>
+                    <span>文字色</span>
                     <input type="color" id="color-picker-watch" value="#ffffff" title="文字色">
                     <button class="tb-btn" id="apply-color-watch">▸</button>
+                  </div>
+                  <div class="tb-sep"></div>
+                  <div class="tb-color">
+                    <span>塗り</span>
+                    <input type="color" id="highlight-picker-watch" value="#ffff00" title="ハイライト色">
+                    <button class="tb-btn" id="apply-highlight-watch">▸</button>
                   </div>
                   <div class="tb-sep"></div>
                   <button class="tb-btn" data-cmd="removeFormat" data-target="watch">CLR</button>
@@ -601,18 +637,45 @@ function execCmd(cmd, value = null) {
   document.execCommand(cmd, false, value);
 }
 
+// フォントサイズ：選択範囲を <span style="font-size:Xpx"> でラップ
+function applyFontSize(editorEl, px) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const span = document.createElement('span');
+  span.style.fontSize = px + 'px';
+  try {
+    range.surroundContents(span);
+  } catch(e) {
+    // 複数ノードにまたがる場合は extractContents → wrap
+    const frag = range.extractContents();
+    span.appendChild(frag);
+    range.insertNode(span);
+  }
+  sel.removeAllRanges();
+  const newRange = document.createRange();
+  newRange.selectNodeContents(span);
+  sel.addRange(newRange);
+}
+
+// ハイライト：backColor を使う（選択範囲に背景色）
+function applyHighlight(editorEl, color) {
+  editorEl.focus();
+  execCmd('backColor', color);
+}
+
 function setupToolbar(toolbarId, editorId) {
   const toolbar = document.getElementById(toolbarId);
   const editor = document.getElementById(editorId);
+
+  // ボタン
   toolbar.querySelectorAll('.tb-btn[data-cmd]').forEach(btn => {
     btn.addEventListener('mousedown', e => {
       e.preventDefault();
       editor.focus();
       const cmd = btn.dataset.cmd;
-      if (cmd === 'h1') execCmd('formatBlock', 'h1');
-      else if (cmd === 'h2') execCmd('formatBlock', 'h2');
-      else if (cmd === 'h3') execCmd('formatBlock', 'h3');
-      else if (cmd === 'insertHR') execCmd('insertHTML', '<hr>');
+      if (cmd === 'insertHR') execCmd('insertHTML', '<hr>');
       else if (cmd === 'insertTable') {
         execCmd('insertHTML', '<table><thead><tr><th>項目</th><th>内容</th></tr></thead><tbody><tr><td></td><td></td></tr></tbody></table><p></p>');
       }
@@ -620,6 +683,19 @@ function setupToolbar(toolbarId, editorId) {
       updateToolbarState(toolbar, editor);
     });
   });
+
+  // フォントサイズ select
+  const fsSelect = toolbar.querySelector('.tb-select');
+  if (fsSelect) {
+    fsSelect.addEventListener('change', e => {
+      const px = e.target.value;
+      if (px) applyFontSize(editor, px);
+      e.target.value = '';
+      markDirty();
+      if (editorId === 'editor-watch') updateWatchPreview();
+    });
+  }
+
   editor.addEventListener('keyup', () => updateToolbarState(toolbar, editor));
   editor.addEventListener('mouseup', () => updateToolbarState(toolbar, editor));
   editor.addEventListener('input', () => { markDirty(); if (editorId === 'editor-watch') updateWatchPreview(); });
@@ -632,15 +708,28 @@ function updateToolbarState(toolbar, editor) {
   });
 }
 
-// color apply
+// 文字色・ハイライト
 document.getElementById('apply-color-body').addEventListener('click', () => {
-  document.getElementById('editor-body').focus();
+  const editor = document.getElementById('editor-body');
+  editor.focus();
   execCmd('foreColor', document.getElementById('color-picker-body').value);
   markDirty();
 });
+document.getElementById('apply-highlight-body').addEventListener('click', () => {
+  const editor = document.getElementById('editor-body');
+  applyHighlight(editor, document.getElementById('highlight-picker-body').value);
+  markDirty();
+});
 document.getElementById('apply-color-watch').addEventListener('click', () => {
-  document.getElementById('editor-watch').focus();
+  const editor = document.getElementById('editor-watch');
+  editor.focus();
   execCmd('foreColor', document.getElementById('color-picker-watch').value);
+  markDirty();
+  updateWatchPreview();
+});
+document.getElementById('apply-highlight-watch').addEventListener('click', () => {
+  const editor = document.getElementById('editor-watch');
+  applyHighlight(editor, document.getElementById('highlight-picker-watch').value);
   markDirty();
   updateWatchPreview();
 });
