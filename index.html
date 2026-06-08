@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PINwatch3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --c-bg: #f5f4f0;
+    --c-surface: #ffffff;
+    --c-surface2: #f9f8f5;
+    --c-border: #d8d5cc;
+    --c-border2: #ece9e2;
+    --c-text: #1a1916;
+    --c-text2: #5a5850;
+    --c-text3: #9a9890;
+    --c-accent: #1a3a5c;
+    --c-accent2: #2a5f8f;
+    --c-warn: #7a3a00;
+    --c-warn-bg: #fff4e6;
+    --c-success: #1a4a2e;
+    --c-success-bg: #e8f5ee;
+    --c-danger: #6b1a1a;
+    --c-danger-bg: #faeaea;
+    --c-tab1: #1a3a5c;
+    --c-tab2: #2d5a1e;
+    --c-tab3: #7a3a00;
+    --c-tab4: #4a1a5c;
+    --radius: 4px;
+    --font-mono: 'IBM Plex Mono', monospace;
+    --font-sans: 'IBM Plex Sans', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: var(--font-sans); background: var(--c-bg); color: var(--c-text); font-size: 15px; }
+
+  /* ── LAYOUT ── */
+  #app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  #header { background: var(--c-accent); color: #fff; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; height: 48px; gap: 16px; }
+  #header h1 { font-family: var(--font-mono); font-size: 15px; font-weight: 600; letter-spacing: 0.12em; white-space: nowrap; }
+  #header-controls { display: flex; gap: 8px; align-items: center; }
+  #main { display: grid; grid-template-columns: 280px 1fr; overflow: hidden; }
+  #sidebar { border-right: 1px solid var(--c-border); display: flex; flex-direction: column; overflow: hidden; background: var(--c-surface); }
+  #content { display: grid; grid-template-rows: 1fr; overflow: hidden; }
+
+  /* ── GIST BAR ── */
+  #gist-bar { padding: 12px 14px; border-bottom: 1px solid var(--c-border2); background: var(--c-surface2); display: flex; gap: 8px; align-items: center; }
+  #gist-bar input { flex: 1; font-family: var(--font-mono); font-size: 11px; padding: 5px 8px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface); color: var(--c-text); }
+  #gist-bar input:focus { outline: none; border-color: var(--c-accent2); }
+
+  /* ── SEARCH ── */
+  #search-bar { padding: 10px 14px; border-bottom: 1px solid var(--c-border2); }
+  #search-bar input { width: 100%; font-family: var(--font-mono); font-size: 12px; padding: 6px 8px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface2); color: var(--c-text); }
+  #search-bar input:focus { outline: none; border-color: var(--c-accent2); background: var(--c-surface); }
+
+  /* ── LIST ── */
+  #airport-list { flex: 1; overflow-y: auto; }
+  #airport-list::-webkit-scrollbar { width: 4px; }
+  #airport-list::-webkit-scrollbar-thumb { background: var(--c-border); }
+  .airport-item { padding: 9px 14px; cursor: pointer; border-bottom: 1px solid var(--c-border2); display: flex; align-items: center; gap: 10px; transition: background 0.1s; }
+  .airport-item:hover { background: var(--c-surface2); }
+  .airport-item.active { background: #e8eff6; border-left: 3px solid var(--c-accent); padding-left: 11px; }
+  .airport-tab { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .airport-item-info { flex: 1; overflow: hidden; }
+  .airport-id { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--c-accent); }
+  .airport-short { font-size: 11px; color: var(--c-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+  .airport-new { padding: 10px 14px; }
+
+  /* ── EDITOR ── */
+  #editor-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+  #editor-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--c-text3); gap: 8px; }
+  #editor-empty .icon { font-size: 48px; opacity: 0.3; }
+  #editor-empty p { font-family: var(--font-mono); font-size: 12px; }
+
+  /* ── EDITOR TABS ── */
+  #editor-tabs { display: flex; border-bottom: 1px solid var(--c-border); background: var(--c-surface2); flex-shrink: 0; }
+  .editor-tab { padding: 9px 16px; font-size: 12px; font-family: var(--font-mono); cursor: pointer; border-right: 1px solid var(--c-border); color: var(--c-text2); transition: background 0.1s, color 0.1s; letter-spacing: 0.04em; }
+  .editor-tab:hover { background: var(--c-surface); color: var(--c-text); }
+  .editor-tab.active { background: var(--c-surface); color: var(--c-accent); font-weight: 600; border-bottom: 2px solid var(--c-accent); margin-bottom: -1px; }
+
+  /* ── META FIELDS ── */
+  #meta-section { padding: 16px 20px; border-bottom: 1px solid var(--c-border2); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; background: var(--c-surface); flex-shrink: 0; }
+  #meta-section.hidden { display: none; }
+  .meta-field { display: flex; flex-direction: column; gap: 4px; }
+  .meta-field label { font-size: 10px; font-family: var(--font-mono); letter-spacing: 0.08em; color: var(--c-text3); text-transform: uppercase; }
+  .meta-field input, .meta-field select { font-family: var(--font-mono); font-size: 12px; padding: 5px 7px; border: 1px solid var(--c-border); border-radius: var(--radius); background: var(--c-surface2); color: var(--c-text); }
+  .meta-field input:focus, .meta-field select:focus { outline: none; border-color: var(--c-accent2); background: var(--c-surface); }
+  .meta-field-full { grid-column: 1 / -1; }
+  .meta-linked { display: flex; gap: 6px; }
+  .meta-linked input { flex: 1; }
+
+  /* ── RICH EDITOR ── */
+  #body-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #body-section.hidden { display: none; }
+  #watch-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #watch-section.hidden { display: none; }
+
+  /* toolbar */
+  .editor-toolbar { padding: 6px 12px; border-bottom: 1px solid var(--c-border2); display: flex; gap: 2px; align-items: center; flex-wrap: wrap; background: var(--c-surface2); flex-shrink: 0; }
+  .tb-btn { padding: 4px 8px; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer; font-size: 12px; font-family: var(--font-mono); color: var(--c-text2); background: transparent; transition: all 0.1s; line-height: 1.4; }
+  .tb-btn:hover { background: var(--c-surface); border-color: var(--c-border); color: var(--c-text); }
+  .tb-btn.active { background: var(--c-accent); color: #fff; border-color: var(--c-accent); }
+  .tb-sep { width: 1px; height: 18px; background: var(--c-border); margin: 0 4px; }
+  .tb-color { display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--c-text2); }
+  .tb-color input[type="color"] { width: 22px; height: 22px; border: 1px solid var(--c-border); border-radius: 3px; cursor: pointer; padding: 1px; background: transparent; }
+
+  /* editable div */
+  .rich-editor { flex: 1; padding: 16px 20px; overflow-y: auto; outline: none; line-height: 1.7; font-size: 14px; background: var(--c-surface); }
+  .rich-editor::-webkit-scrollbar { width: 4px; }
+  .rich-editor::-webkit-scrollbar-thumb { background: var(--c-border); }
+  .rich-editor:empty::before { content: attr(data-placeholder); color: var(--c-text3); font-family: var(--font-mono); font-size: 12px; pointer-events: none; }
+  .rich-editor table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 13px; }
+  .rich-editor td, .rich-editor th { border: 1px solid var(--c-border); padding: 4px 8px; }
+  .rich-editor th { background: var(--c-surface2); font-weight: 600; }
+  .rich-editor hr { border: none; border-top: 1px solid var(--c-border); margin: 10px 0; }
+  .rich-editor h1 { font-size: 18px; font-weight: 600; margin: 8px 0 4px; }
+  .rich-editor h2 { font-size: 15px; font-weight: 600; margin: 6px 0 3px; }
+  .rich-editor h3 { font-size: 13px; font-weight: 600; margin: 4px 0 2px; }
+  .rich-editor ul, .rich-editor ol { padding-left: 20px; }
+  .rich-editor a { color: var(--c-accent2); }
+  .rich-editor img { max-width: 100%; }
+
+  /* watch preview */
+  #watch-preview-wrap { padding: 16px 20px; background: var(--c-surface2); border-top: 1px solid var(--c-border2); flex-shrink: 0; }
+  #watch-preview-wrap label { font-size: 10px; font-family: var(--font-mono); letter-spacing: 0.08em; color: var(--c-text3); text-transform: uppercase; display: block; margin-bottom: 8px; }
+  #watch-preview-frame { width: 198px; height: 242px; border-radius: 24px; border: 3px solid #333; background: #000; overflow: hidden; position: relative; }
+  #watch-preview-frame iframe { width: 100%; height: 100%; border: none; background: #fff; }
+
+  /* ── FOOTER ── */
+  #editor-footer { padding: 10px 20px; border-top: 1px solid var(--c-border); display: flex; gap: 8px; align-items: center; background: var(--c-surface2); flex-shrink: 0; }
+  #editor-footer.hidden { display: none; }
+  #save-status { font-family: var(--font-mono); font-size: 11px; color: var(--c-text3); flex: 1; }
+
+  /* ── BUTTONS ── */
+  .btn { padding: 6px 14px; border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; cursor: pointer; border: 1px solid; transition: all 0.1s; line-height: 1.4; font-weight: 500; letter-spacing: 0.04em; }
+  .btn-primary { background: var(--c-accent); color: #fff; border-color: var(--c-accent); }
+  .btn-primary:hover { background: var(--c-accent2); border-color: var(--c-accent2); }
+  .btn-ghost { background: transparent; color: var(--c-text2); border-color: var(--c-border); }
+  .btn-ghost:hover { background: var(--c-surface); color: var(--c-text); border-color: var(--c-text2); }
+  .btn-danger { background: transparent; color: var(--c-danger); border-color: var(--c-danger); }
+  .btn-danger:hover { background: var(--c-danger-bg); }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-icon { padding: 5px 8px; font-size: 13px; }
+
+  /* ── STATUS ── */
+  .status-bar { padding: 4px 20px; font-family: var(--font-mono); font-size: 10px; color: var(--c-text3); background: var(--c-surface2); border-top: 1px solid var(--c-border2); display: flex; gap: 16px; }
+  .status-ok { color: var(--c-success); }
+  .status-err { color: var(--c-danger); }
+  .status-warn { color: var(--c-warn); }
+
+  /* ── TOAST ── */
+  #toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; background: var(--c-accent); color: #fff; border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; opacity: 0; transform: translateY(8px); transition: all 0.2s; pointer-events: none; z-index: 999; }
+  #toast.show { opacity: 1; transform: translateY(0); }
+
+  /* ── COLOR SWATCHES ── */
+  .tab-color-picker { display: flex; gap: 4px; align-items: center; }
+  .tab-swatch { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: transform 0.1s; }
+  .tab-swatch:hover { transform: scale(1.2); }
+  .tab-swatch.selected { border-color: var(--c-text); }
+
+  /* ── LINKED AREA ── */
+  .linked-badge { font-family: var(--font-mono); font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--c-surface2); border: 1px solid var(--c-border); color: var(--c-text2); cursor: pointer; }
+  .linked-badge:hover { border-color: var(--c-accent2); color: var(--c-accent); }
+
+  /* ── MODAL ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal-overlay.hidden { display: none; }
+  .modal-box { background: var(--c-surface); border-radius: 6px; padding: 24px; width: 480px; max-width: 96vw; border: 1px solid var(--c-border); }
+  .modal-title { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--c-accent); margin-bottom: 16px; letter-spacing: 0.06em; }
+  .modal-input { width: 100%; font-family: var(--font-mono); font-size: 12px; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--radius); margin-bottom: 12px; background: var(--c-surface2); color: var(--c-text); }
+  .modal-input:focus { outline: none; border-color: var(--c-accent2); }
+  .modal-hint { font-size: 11px; color: var(--c-text3); margin-bottom: 16px; font-family: var(--font-mono); line-height: 1.6; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* ── SECTION HEADER ── */
+  .section-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; color: var(--c-text3); text-transform: uppercase; padding: 8px 14px 4px; }
+
+  /* ── RESPONSIVE for iPad ── */
+  @media (max-width: 900px) {
+    #main { grid-template-columns: 240px 1fr; }
+  }
+  @media (max-width: 640px) {
+    #main { grid-template-columns: 1fr; }
+    #sidebar { display: none; }
+    #sidebar.open { display: flex; position: fixed; inset: 48px 0 0 0; z-index: 50; width: 280px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="header">
+    <h1>PINWATCH <span style="opacity:0.5;font-weight:300">3</span></h1>
+    <div id="header-controls">
+      <span id="gist-status-dot" style="width:8px;height:8px;border-radius:50%;background:#666;display:inline-block;" title="Gist未接続"></span>
+      <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-settings">⚙ GIST</button>
+      <button class="btn btn-primary btn-sm" id="btn-sync-all">↑ SYNC ALL</button>
+      <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-new">+ NEW</button>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <div id="main">
+
+    <!-- SIDEBAR: airport list -->
+    <aside id="sidebar">
+      <div id="search-bar">
+        <input type="text" id="search-input" placeholder="ICAO / 名前 で検索..." autocomplete="off" spellcheck="false">
+      </div>
+      <div class="section-label">AIRPORTS</div>
+      <div id="airport-list"></div>
+    </aside>
+
+    <!-- CONTENT: editor -->
+    <main id="content">
+      <div id="editor-panel">
+
+        <!-- empty state -->
+        <div id="editor-empty">
+          <div class="icon">✈</div>
+          <p>空港を選択するか、NEW で追加</p>
+        </div>
+
+        <!-- editor (hidden until item selected) -->
+        <div id="editor-inner" style="display:none; flex-direction:column; height:100%; overflow:hidden; display:none;">
+
+          <!-- tabs -->
+          <div id="editor-tabs">
+            <div class="editor-tab active" data-tab="meta">META</div>
+            <div class="editor-tab" data-tab="body">BODY</div>
+            <div class="editor-tab" data-tab="watch">WATCH</div>
+          </div>
+
+          <!-- META section -->
+          <div id="meta-section">
+            <div class="meta-field">
+              <label>ID (ICAO)</label>
+              <input type="text" id="f-id" placeholder="RJAA" maxlength="8" spellcheck="false">
+            </div>
+            <div class="meta-field">
+              <label>SHORT NAME</label>
+              <input type="text" id="f-short" placeholder="成田国際空港" spellcheck="false">
+            </div>
+            <div class="meta-field">
+              <label>TERMINAL GROUP</label>
+              <input type="text" id="f-terminalGroup" placeholder="T1,T2,T3" spellcheck="false">
+            </div>
+            <div class="meta-field">
+              <label>LAT</label>
+              <input type="number" id="f-lat" placeholder="35.7653" step="0.0001">
+            </div>
+            <div class="meta-field">
+              <label>LNG</label>
+              <input type="number" id="f-lng" placeholder="140.3856" step="0.0001">
+            </div>
+            <div class="meta-field">
+              <label>RADIUS (km)</label>
+              <input type="number" id="f-radiusKm" placeholder="2.0" step="0.1" min="0.1">
+            </div>
+            <div class="meta-field">
+              <label>TAB COLOR</label>
+              <div class="tab-color-picker" id="tab-color-picker">
+                <!-- swatches inserted by JS -->
+              </div>
+            </div>
+            <div class="meta-field">
+              <label>LINKED AREA</label>
+              <div class="meta-linked">
+                <input type="text" id="f-linkedAreaId" placeholder="RJAA-T2" spellcheck="false">
+                <button class="btn btn-ghost btn-sm" id="btn-goto-linked" title="Linked Areaに移動">→</button>
+              </div>
+            </div>
+            <div class="meta-field" style="display:flex;align-items:flex-end;">
+              <button class="btn btn-danger btn-sm" id="btn-delete-airport">DELETE</button>
+            </div>
+          </div>
+
+          <!-- BODY section -->
+          <div id="body-section" class="hidden">
+            <div class="editor-toolbar" id="toolbar-body">
+              <button class="tb-btn" data-cmd="bold" title="⌘B"><b>B</b></button>
+              <button class="tb-btn" data-cmd="italic" title="⌘I"><i>I</i></button>
+              <button class="tb-btn" data-cmd="underline" title="⌘U"><u>U</u></button>
+              <div class="tb-sep"></div>
+              <button class="tb-btn" data-cmd="h1">H1</button>
+              <button class="tb-btn" data-cmd="h2">H2</button>
+              <button class="tb-btn" data-cmd="h3">H3</button>
+              <div class="tb-sep"></div>
+              <button class="tb-btn" data-cmd="insertUnorderedList">• LIST</button>
+              <button class="tb-btn" data-cmd="insertOrderedList">1. LIST</button>
+              <div class="tb-sep"></div>
+              <button class="tb-btn" data-cmd="insertTable" title="テーブル挿入">TABLE</button>
+              <button class="tb-btn" data-cmd="insertHR" title="区切り線">HR</button>
+              <div class="tb-sep"></div>
+              <div class="tb-color">
+                <span>COLOR</span>
+                <input type="color" id="color-picker-body" value="#1a3a5c" title="文字色">
+                <button class="tb-btn" id="apply-color-body" title="選択テキストに色を適用">▸</button>
+              </div>
+              <div class="tb-sep"></div>
+              <button class="tb-btn" data-cmd="removeFormat" title="書式クリア">CLR</button>
+            </div>
+            <div class="rich-editor" id="editor-body" contenteditable="true" spellcheck="false" data-placeholder="HTML本文を入力（空港PIN、ゲート情報など）..."></div>
+          </div>
+
+          <!-- WATCH section -->
+          <div id="watch-section" class="hidden">
+            <div style="display:grid;grid-template-columns:1fr auto;flex:1;overflow:hidden;">
+              <div style="display:flex;flex-direction:column;overflow:hidden;">
+                <div class="editor-toolbar" id="toolbar-watch">
+                  <button class="tb-btn" data-cmd="bold" data-target="watch"><b>B</b></button>
+                  <button class="tb-btn" data-cmd="italic" data-target="watch"><i>I</i></button>
+                  <button class="tb-btn" data-cmd="underline" data-target="watch"><u>U</u></button>
+                  <div class="tb-sep"></div>
+                  <button class="tb-btn" data-cmd="h2" data-target="watch">H2</button>
+                  <button class="tb-btn" data-cmd="h3" data-target="watch">H3</button>
+                  <div class="tb-sep"></div>
+                  <button class="tb-btn" data-cmd="insertUnorderedList" data-target="watch">• LIST</button>
+                  <div class="tb-sep"></div>
+                  <div class="tb-color">
+                    <span>COLOR</span>
+                    <input type="color" id="color-picker-watch" value="#ffffff" title="文字色">
+                    <button class="tb-btn" id="apply-color-watch">▸</button>
+                  </div>
+                  <div class="tb-sep"></div>
+                  <button class="tb-btn" data-cmd="removeFormat" data-target="watch">CLR</button>
+                  <div class="tb-sep"></div>
+                  <button class="tb-btn" id="btn-copy-from-body" title="BODYからwatchBodyにコピー（先頭のみ）">← FROM BODY</button>
+                </div>
+                <div class="rich-editor" id="editor-watch" contenteditable="true" spellcheck="false"
+                     style="background:#111;color:#eee;font-family:var(--font-mono);font-size:13px;"
+                     data-placeholder="Apple Watch 表示HTML（簡潔に）..."></div>
+              </div>
+              <!-- watch preview -->
+              <div style="padding:16px;background:var(--c-surface2);border-left:1px solid var(--c-border2);display:flex;flex-direction:column;align-items:center;gap:8px;">
+                <div style="font-size:10px;font-family:var(--font-mono);letter-spacing:0.08em;color:var(--c-text3);text-transform:uppercase;">PREVIEW</div>
+                <div id="watch-preview-frame">
+                  <iframe id="watch-iframe" sandbox="allow-same-origin"></iframe>
+                </div>
+                <div style="font-size:10px;color:var(--c-text3);font-family:var(--font-mono);">Series 9 (45mm)</div>
+                <button class="btn btn-ghost btn-sm" id="btn-refresh-watch">↺ REFRESH</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- FOOTER -->
+          <div id="editor-footer">
+            <span id="save-status">未保存の変更はありません</span>
+            <button class="btn btn-ghost btn-sm" id="btn-revert">REVERT</button>
+            <button class="btn btn-primary btn-sm" id="btn-save-local">SAVE LOCAL</button>
+            <button class="btn btn-primary" id="btn-save-gist">↑ SAVE TO GIST</button>
+          </div>
+
+        </div><!-- /editor-inner -->
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- GIST SETTINGS MODAL -->
+<div class="modal-overlay hidden" id="modal-settings">
+  <div class="modal-box">
+    <div class="modal-title">GIST CONFIGURATION</div>
+    <div class="modal-hint">GitHub Gist の Personal Access Token (gist スコープ) と Gist ID を設定してください。<br>データは airports.json として保存されます。</div>
+    <label style="font-size:10px;font-family:var(--font-mono);color:var(--c-text3);letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:4px;">GITHUB TOKEN</label>
+    <input type="password" class="modal-input" id="modal-token" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
+    <label style="font-size:10px;font-family:var(--font-mono);color:var(--c-text3);letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:4px;">GIST ID</label>
+    <input type="text" class="modal-input" id="modal-gist-id" placeholder="abc123def456..." autocomplete="off" spellcheck="false">
+    <div class="modal-hint" style="margin-top:0;">トークンは localStorage に保存されます。共有PCでの使用には注意してください。</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modal-cancel">CANCEL</button>
+      <button class="btn btn-primary" id="modal-save-settings">SAVE & CONNECT</button>
+    </div>
+  </div>
+</div>
+
+<!-- DELETE CONFIRM MODAL -->
+<div class="modal-overlay hidden" id="modal-delete">
+  <div class="modal-box">
+    <div class="modal-title" style="color:var(--c-danger);">DELETE AIRPORT</div>
+    <p style="font-family:var(--font-mono);font-size:13px;margin-bottom:20px;color:var(--c-text2);">
+      <span id="delete-confirm-id" style="color:var(--c-danger);font-weight:600;"></span> を削除します。この操作はローカルのみです。Gistへの同期後に反映されます。
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="delete-cancel">CANCEL</button>
+      <button class="btn btn-danger" id="delete-confirm">DELETE</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+const TAB_COLORS = [
+  { value: '#1a3a5c', label: 'Navy' },
+  { value: '#2d5a1e', label: 'Green' },
+  { value: '#7a3a00', label: 'Amber' },
+  { value: '#4a1a5c', label: 'Purple' },
+  { value: '#5c1a1a', label: 'Red' },
+  { value: '#1a5c5c', label: 'Teal' },
+  { value: '#3a3a3a', label: 'Gray' },
+];
+
+let state = {
+  airports: [],
+  selectedId: null,
+  dirty: false,
+  activeTab: 'meta',
+  token: localStorage.getItem('pw3_token') || '',
+  gistId: localStorage.getItem('pw3_gist_id') || '',
+};
+
+// ══════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = type === 'err' ? 'var(--c-danger)' : type === 'warn' ? 'var(--c-warn)' : 'var(--c-accent)';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+function setDirty(v) {
+  state.dirty = v;
+  document.getElementById('save-status').textContent = v ? '● 未保存の変更があります' : '変更なし';
+  document.getElementById('save-status').style.color = v ? 'var(--c-warn)' : 'var(--c-text3)';
+}
+
+function genId() {
+  return 'NEW-' + Math.random().toString(36).slice(2,6).toUpperCase();
+}
+
+function getSelected() {
+  return state.airports.find(a => a.id === state.selectedId);
+}
+
+// ══════════════════════════════════════════
+// GIST STATUS DOT
+// ══════════════════════════════════════════
+function updateGistDot() {
+  const dot = document.getElementById('gist-status-dot');
+  if (state.token && state.gistId) {
+    dot.style.background = '#4aaa66';
+    dot.title = 'Gist接続済み: ' + state.gistId.slice(0,8) + '...';
+  } else {
+    dot.style.background = '#888';
+    dot.title = 'Gist未設定';
+  }
+}
+
+// ══════════════════════════════════════════
+// RENDER LIST
+// ══════════════════════════════════════════
+function renderList() {
+  const q = document.getElementById('search-input').value.trim().toLowerCase();
+  const list = document.getElementById('airport-list');
+  list.innerHTML = '';
+  const filtered = state.airports.filter(a =>
+    !q || a.id.toLowerCase().includes(q) || (a.short||'').toLowerCase().includes(q)
+  );
+  filtered.forEach(a => {
+    const div = document.createElement('div');
+    div.className = 'airport-item' + (a.id === state.selectedId ? ' active' : '');
+    div.dataset.id = a.id;
+    const color = a.tabColor || '#888';
+    div.innerHTML = `
+      <div class="airport-tab" style="background:${color}"></div>
+      <div class="airport-item-info">
+        <div class="airport-id">${a.id}</div>
+        <div class="airport-short">${a.short || '—'}</div>
+      </div>
+    `;
+    div.addEventListener('click', () => selectAirport(a.id));
+    list.appendChild(div);
+  });
+
+  // count
+  const label = document.querySelector('.section-label');
+  label.textContent = `AIRPORTS (${state.airports.length})`;
+}
+
+// ══════════════════════════════════════════
+// SELECT AIRPORT
+// ══════════════════════════════════════════
+function selectAirport(id) {
+  if (state.dirty && state.selectedId) {
+    if (!confirm('未保存の変更があります。破棄しますか？')) return;
+  }
+  state.selectedId = id;
+  state.dirty = false;
+  renderList();
+  renderEditor();
+}
+
+// ══════════════════════════════════════════
+// RENDER EDITOR
+// ══════════════════════════════════════════
+function renderEditor() {
+  const a = getSelected();
+  const empty = document.getElementById('editor-empty');
+  const inner = document.getElementById('editor-inner');
+  if (!a) {
+    empty.style.display = 'flex';
+    inner.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  inner.style.display = 'flex';
+
+  // fill fields
+  document.getElementById('f-id').value = a.id || '';
+  document.getElementById('f-short').value = a.short || '';
+  document.getElementById('f-lat').value = a.lat != null ? a.lat : '';
+  document.getElementById('f-lng').value = a.lng != null ? a.lng : '';
+  document.getElementById('f-radiusKm').value = a.radiusKm != null ? a.radiusKm : '';
+  document.getElementById('f-terminalGroup').value = a.terminalGroup || '';
+  document.getElementById('f-linkedAreaId').value = a.linkedAreaId || '';
+
+  // tab color swatches
+  buildColorSwatches(a.tabColor || TAB_COLORS[0].value);
+
+  // rich editors
+  document.getElementById('editor-body').innerHTML = a.body || '';
+  document.getElementById('editor-watch').innerHTML = a.watchBody || '';
+
+  // activate correct tab
+  showEditorTab(state.activeTab);
+  setDirty(false);
+  updateWatchPreview();
+}
+
+// ══════════════════════════════════════════
+// TAB COLOR SWATCHES
+// ══════════════════════════════════════════
+function buildColorSwatches(current) {
+  const container = document.getElementById('tab-color-picker');
+  container.innerHTML = '';
+  TAB_COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.className = 'tab-swatch' + (c.value === current ? ' selected' : '');
+    sw.style.background = c.value;
+    sw.title = c.label;
+    sw.dataset.color = c.value;
+    sw.addEventListener('click', () => {
+      document.querySelectorAll('.tab-swatch').forEach(s => s.classList.remove('selected'));
+      sw.classList.add('selected');
+      markDirty();
+    });
+    container.appendChild(sw);
+  });
+  // custom color
+  const inp = document.createElement('input');
+  inp.type = 'color';
+  inp.value = current;
+  inp.style.cssText = 'width:22px;height:22px;border:1px solid var(--c-border);border-radius:3px;cursor:pointer;padding:1px;';
+  inp.title = 'カスタム';
+  inp.addEventListener('input', () => {
+    document.querySelectorAll('.tab-swatch').forEach(s => s.classList.remove('selected'));
+    markDirty();
+  });
+  container.appendChild(inp);
+}
+
+function getSelectedColor() {
+  const sel = document.querySelector('.tab-swatch.selected');
+  if (sel) return sel.dataset.color;
+  const inp = document.querySelector('#tab-color-picker input[type=color]');
+  return inp ? inp.value : '#888';
+}
+
+// ══════════════════════════════════════════
+// EDITOR TABS
+// ══════════════════════════════════════════
+function showEditorTab(tab) {
+  state.activeTab = tab;
+  document.querySelectorAll('.editor-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tab);
+  });
+  document.getElementById('meta-section').classList.toggle('hidden', tab !== 'meta');
+  document.getElementById('body-section').classList.toggle('hidden', tab !== 'body');
+  document.getElementById('watch-section').classList.toggle('hidden', tab !== 'watch');
+  // footer always visible when airport selected
+}
+
+document.querySelectorAll('.editor-tab').forEach(t => {
+  t.addEventListener('click', () => showEditorTab(t.dataset.tab));
+});
+
+// ══════════════════════════════════════════
+// RICH EDITOR TOOLBAR
+// ══════════════════════════════════════════
+function execCmd(cmd, value = null) {
+  document.execCommand(cmd, false, value);
+}
+
+function setupToolbar(toolbarId, editorId) {
+  const toolbar = document.getElementById(toolbarId);
+  const editor = document.getElementById(editorId);
+  toolbar.querySelectorAll('.tb-btn[data-cmd]').forEach(btn => {
+    btn.addEventListener('mousedown', e => {
+      e.preventDefault();
+      editor.focus();
+      const cmd = btn.dataset.cmd;
+      if (cmd === 'h1') execCmd('formatBlock', 'h1');
+      else if (cmd === 'h2') execCmd('formatBlock', 'h2');
+      else if (cmd === 'h3') execCmd('formatBlock', 'h3');
+      else if (cmd === 'insertHR') execCmd('insertHTML', '<hr>');
+      else if (cmd === 'insertTable') {
+        execCmd('insertHTML', '<table><thead><tr><th>項目</th><th>内容</th></tr></thead><tbody><tr><td></td><td></td></tr></tbody></table><p></p>');
+      }
+      else execCmd(cmd);
+      updateToolbarState(toolbar, editor);
+    });
+  });
+  editor.addEventListener('keyup', () => updateToolbarState(toolbar, editor));
+  editor.addEventListener('mouseup', () => updateToolbarState(toolbar, editor));
+  editor.addEventListener('input', () => { markDirty(); if (editorId === 'editor-watch') updateWatchPreview(); });
+}
+
+function updateToolbarState(toolbar, editor) {
+  ['bold','italic','underline'].forEach(cmd => {
+    const btn = toolbar.querySelector(`[data-cmd="${cmd}"]`);
+    if (btn) btn.classList.toggle('active', document.queryCommandState(cmd));
+  });
+}
+
+// color apply
+document.getElementById('apply-color-body').addEventListener('click', () => {
+  document.getElementById('editor-body').focus();
+  execCmd('foreColor', document.getElementById('color-picker-body').value);
+  markDirty();
+});
+document.getElementById('apply-color-watch').addEventListener('click', () => {
+  document.getElementById('editor-watch').focus();
+  execCmd('foreColor', document.getElementById('color-picker-watch').value);
+  markDirty();
+  updateWatchPreview();
+});
+
+setupToolbar('toolbar-body', 'editor-body');
+setupToolbar('toolbar-watch', 'editor-watch');
+
+// ── Mac keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) return;
+  const active = document.activeElement;
+  const isEditor = active.classList.contains('rich-editor');
+  if (isEditor) {
+    if (e.key === 'b') { e.preventDefault(); execCmd('bold'); }
+    if (e.key === 'i') { e.preventDefault(); execCmd('italic'); }
+    if (e.key === 'u') { e.preventDefault(); execCmd('underline'); }
+    if (e.key === 's') { e.preventDefault(); saveLocal(); }
+  } else {
+    if (e.key === 's') { e.preventDefault(); saveLocal(); }
+  }
+});
+
+// ══════════════════════════════════════════
+// WATCH PREVIEW
+// ══════════════════════════════════════════
+function updateWatchPreview() {
+  const content = document.getElementById('editor-watch').innerHTML;
+  const iframe = document.getElementById('watch-iframe');
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body { margin:8px; font-family:-apple-system,sans-serif; font-size:13px; color:#eee; background:#000; line-height:1.5; }
+h2 { font-size:14px; margin:0 0 6px; color:#fff; }
+h3 { font-size:13px; margin:4px 0; color:#ddd; }
+table { width:100%; border-collapse:collapse; font-size:11px; }
+td,th { padding:2px 4px; border-bottom:1px solid #333; }
+th { color:#aaa; text-align:left; }
+hr { border:none; border-top:1px solid #333; margin:6px 0; }
+ul { padding-left:14px; margin:4px 0; }
+</style></head><body>${content}</body></html>`;
+  iframe.srcdoc = html;
+}
+
+document.getElementById('btn-refresh-watch').addEventListener('click', updateWatchPreview);
+
+document.getElementById('btn-copy-from-body').addEventListener('click', () => {
+  const bodyHTML = document.getElementById('editor-body').innerHTML;
+  // take first 400 chars of text
+  const tmp = document.createElement('div');
+  tmp.innerHTML = bodyHTML;
+  const text = tmp.innerText.slice(0, 300);
+  document.getElementById('editor-watch').innerHTML = `<p>${text.replace(/\n/g,'<br>')}</p>`;
+  markDirty();
+  updateWatchPreview();
+  toast('BODYから先頭テキストをコピーしました');
+});
+
+// ══════════════════════════════════════════
+// MARK DIRTY & COLLECT DATA
+// ══════════════════════════════════════════
+function markDirty() {
+  setDirty(true);
+}
+
+// attach change listeners
+['f-id','f-short','f-lat','f-lng','f-radiusKm','f-terminalGroup','f-linkedAreaId'].forEach(id => {
+  document.getElementById(id).addEventListener('input', markDirty);
+});
+document.getElementById('editor-body').addEventListener('input', markDirty);
+
+function collectEditorData() {
+  const a = getSelected();
+  if (!a) return null;
+  return {
+    ...a,
+    id: document.getElementById('f-id').value.trim().toUpperCase() || a.id,
+    short: document.getElementById('f-short').value.trim(),
+    lat: parseFloat(document.getElementById('f-lat').value) || 0,
+    lng: parseFloat(document.getElementById('f-lng').value) || 0,
+    radiusKm: parseFloat(document.getElementById('f-radiusKm').value) || 2.0,
+    terminalGroup: document.getElementById('f-terminalGroup').value.trim(),
+    linkedAreaId: document.getElementById('f-linkedAreaId').value.trim(),
+    tabColor: getSelectedColor(),
+    body: document.getElementById('editor-body').innerHTML,
+    watchBody: document.getElementById('editor-watch').innerHTML,
+  };
+}
+
+// ══════════════════════════════════════════
+// SAVE LOCAL
+// ══════════════════════════════════════════
+function saveLocal() {
+  const data = collectEditorData();
+  if (!data) return;
+  const oldId = state.selectedId;
+  const idx = state.airports.findIndex(a => a.id === oldId);
+  if (idx === -1) return;
+  state.airports[idx] = data;
+  state.selectedId = data.id;
+  setDirty(false);
+  renderList();
+  toast('ローカルに保存しました (' + data.id + ')');
+  localStorage.setItem('pw3_local', JSON.stringify(state.airports));
+}
+
+document.getElementById('btn-save-local').addEventListener('click', saveLocal);
+document.getElementById('btn-revert').addEventListener('click', () => {
+  if (!confirm('変更を破棄しますか？')) return;
+  renderEditor();
+});
+
+// ══════════════════════════════════════════
+// GIST API
+// ══════════════════════════════════════════
+async function fetchGist() {
+  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
+  try {
+    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!res.ok) throw new Error(res.status);
+    const gist = await res.json();
+    const file = gist.files['airports.json'];
+    if (!file) throw new Error('airports.json not found in gist');
+    state.airports = JSON.parse(file.content);
+    renderList();
+    if (state.airports.length > 0 && !state.selectedId) selectAirport(state.airports[0].id);
+    toast('Gistから読み込み完了 (' + state.airports.length + ' airports)');
+    updateGistDot();
+  } catch(e) {
+    toast('Gist取得失敗: ' + e.message, 'err');
+  }
+}
+
+async function syncToGist() {
+  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
+  try {
+    const content = JSON.stringify(state.airports, null, 2);
+    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `token ${state.token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ files: { 'airports.json': { content } } })
+    });
+    if (!res.ok) throw new Error(res.status);
+    toast('Gistに同期しました (' + state.airports.length + ' airports)');
+    localStorage.setItem('pw3_local', content);
+  } catch(e) {
+    toast('Gist同期失敗: ' + e.message, 'err');
+  }
+}
+
+document.getElementById('btn-sync-all').addEventListener('click', async () => {
+  // save current if dirty first
+  if (state.dirty) saveLocal();
+  await syncToGist();
+});
+
+// ══════════════════════════════════════════
+// NEW AIRPORT
+// ══════════════════════════════════════════
+document.getElementById('btn-new').addEventListener('click', () => {
+  const id = genId();
+  const newAirport = {
+    id, short: '新規空港', lat: 35.0, lng: 135.0, radiusKm: 2.0,
+    tabColor: TAB_COLORS[0].value, terminalGroup: '', linkedAreaId: '',
+    body: '', watchBody: ''
+  };
+  state.airports.unshift(newAirport);
+  selectAirport(id);
+  showEditorTab('meta');
+  document.getElementById('f-id').focus();
+  toast('新規エントリを作成しました');
+});
+
+// ══════════════════════════════════════════
+// DELETE
+// ══════════════════════════════════════════
+document.getElementById('btn-delete-airport').addEventListener('click', () => {
+  const a = getSelected();
+  if (!a) return;
+  document.getElementById('delete-confirm-id').textContent = a.id;
+  document.getElementById('modal-delete').classList.remove('hidden');
+});
+document.getElementById('delete-cancel').addEventListener('click', () => {
+  document.getElementById('modal-delete').classList.add('hidden');
+});
+document.getElementById('delete-confirm').addEventListener('click', () => {
+  const id = state.selectedId;
+  state.airports = state.airports.filter(a => a.id !== id);
+  state.selectedId = null;
+  state.dirty = false;
+  document.getElementById('modal-delete').classList.add('hidden');
+  renderList();
+  renderEditor();
+  toast('削除しました: ' + id);
+  localStorage.setItem('pw3_local', JSON.stringify(state.airports));
+});
+
+// ══════════════════════════════════════════
+// LINKED AREA
+// ══════════════════════════════════════════
+document.getElementById('btn-goto-linked').addEventListener('click', () => {
+  const lid = document.getElementById('f-linkedAreaId').value.trim();
+  if (!lid) return;
+  const found = state.airports.find(a => a.id === lid);
+  if (found) selectAirport(lid);
+  else toast('Linked Area が見つかりません: ' + lid, 'warn');
+});
+
+// ══════════════════════════════════════════
+// SETTINGS MODAL
+// ══════════════════════════════════════════
+document.getElementById('btn-settings').addEventListener('click', () => {
+  document.getElementById('modal-token').value = state.token;
+  document.getElementById('modal-gist-id').value = state.gistId;
+  document.getElementById('modal-settings').classList.remove('hidden');
+});
+document.getElementById('modal-cancel').addEventListener('click', () => {
+  document.getElementById('modal-settings').classList.add('hidden');
+});
+document.getElementById('modal-save-settings').addEventListener('click', async () => {
+  state.token = document.getElementById('modal-token').value.trim();
+  state.gistId = document.getElementById('modal-gist-id').value.trim();
+  localStorage.setItem('pw3_token', state.token);
+  localStorage.setItem('pw3_gist_id', state.gistId);
+  document.getElementById('modal-settings').classList.add('hidden');
+  updateGistDot();
+  await fetchGist();
+});
+
+// ══════════════════════════════════════════
+// SEARCH
+// ══════════════════════════════════════════
+document.getElementById('search-input').addEventListener('input', renderList);
+
+// ══════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════
+(function init() {
+  updateGistDot();
+
+  // load local cache
+  const local = localStorage.getItem('pw3_local');
+  if (local) {
+    try {
+      state.airports = JSON.parse(local);
+      renderList();
+      if (state.airports.length > 0) selectAirport(state.airports[0].id);
+      toast('ローカルキャッシュを読み込みました');
+    } catch(e) {}
+  }
+
+  // if gist configured, load from gist
+  if (state.token && state.gistId) {
+    fetchGist();
+  }
+})();
+</script>
+</body>
+</html>
