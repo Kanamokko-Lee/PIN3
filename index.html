@@ -1015,6 +1015,8 @@ document.getElementById('clear-highlight-watch').addEventListener('click', () =>
   document.getElementById('editor-watch').innerHTML = editor.innerHTML;
   markDirty();
 });
+
+document.getElementById('apply-color-watch').addEventListener('click', () => {
   const editor = document.getElementById('watch-direct-editor');
   editor.focus();
   execCmd('foreColor', document.getElementById('color-picker-watch').value);
