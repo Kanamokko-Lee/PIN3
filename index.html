@@ -1245,6 +1245,8 @@ document.getElementById('btn-copy-from-body').addEventListener('click', () => {
 // ══════════════════════════════════════════
 function markDirty() {
   setDirty(true);
+  // 編集時刻を記録（同期判断に使用）
+  localStorage.setItem('pw3_local_edited_at', new Date().toISOString());
 }
 
 // attach change listeners
@@ -1417,65 +1419,99 @@ async function fetchGist() {
   }
 }
 
-// ── Gistのバージョン管理 ──
-// lastSyncedAt：最後にGistと同期した日時（localStorageに保存）
-function getLastSyncedAt() {
-  return localStorage.getItem('pw3_last_synced') || '1970-01-01T00:00:00Z';
-}
-function setLastSyncedAt(isoString) {
-  localStorage.setItem('pw3_last_synced', isoString);
-}
-
-// ── fetchGist（内部共通処理）──
-async function fetchGistData() {
-  const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
-    headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
-  });
-  if (!res.ok) throw new Error(res.status);
-  return await res.json();
-}
-
-async function uploadToGist(airports) {
-  const content = JSON.stringify(airports, null, 2);
-  const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `token ${state.token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ files: { 'airports.json': { content } } })
-  });
-  if (!res.ok) throw new Error(res.status);
-  return await res.json();
-}
-
-// ── スマート同期（⇄ 同期ボタン用）──
-async function syncToGist() {
-  if (!state.token || !state.gistId) {
-    toast('Gistトークンとidを設定してください', 'warn');
-    return;
-  }
+// ── fetchGist（起動時の初期ロード専用）──
+async function fetchGist() {
+  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
-    toast('同期中...');
+    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!res.ok) throw new Error(res.status);
+    const gist = await res.json();
+    const file = gist.files['airports.json'];
+    if (!file) throw new Error('airports.json not found in gist');
+    const airports = JSON.parse(file.content);
+    state.airports = airports;
+    localStorage.setItem('pw3_local', JSON.stringify(airports));
+    // 起動時ロード後はGistの時刻をローカル編集時刻として記録
+    // （編集していない状態なのでGistと同じ時刻にする）
+    localStorage.setItem('pw3_local_edited_at', gist.updated_at);
+    renderList();
+    if (state.airports.length > 0 && !state.selectedId) {
+      selectAirport(state.airports[0].id);
+    } else if (state.selectedId) {
+      renderEditor();
+    }
+    toast('Gistから読み込み完了 (' + airports.length + ' airports)');
+    updateGistDot();
+  } catch(e) {
+    toast('Gist取得失敗: ' + e.message, 'err');
+  }
+}
 
-    // Gistの情報を取得
-    const gist = await fetchGistData();
-    const gistUpdatedAt  = new Date(gist.updated_at).getTime();
-    const lastSyncedAt   = new Date(getLastSyncedAt()).getTime();
+// ── 同期ボタン ──
+// ローカル編集時刻 > Gistの更新時刻 → アップロード
+// Gistの更新時刻 > ローカル編集時刻 → ダウンロード
+async function syncToGist() {
+  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
+  try {
+    // まずGistのメタ情報だけ取得（updated_atを確認）
+    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!res.ok) throw new Error(res.status);
+    const gist = await res.json();
     const file = gist.files['airports.json'];
     if (!file) throw new Error('airports.json not found');
 
-    if (gistUpdatedAt > lastSyncedAt) {
-      // ── Gistが新しい → ダウンロード ──
-      const gistAirports = JSON.parse(file.content);
-      state.airports = gistAirports;
-      const content = JSON.stringify(gistAirports, null, 2);
-      localStorage.setItem('pw3_local', content);
-      setLastSyncedAt(gist.updated_at);
-      updateGistDot();
+    const gistTime  = new Date(gist.updated_at).getTime();
+    const localEditedAt = localStorage.getItem('pw3_local_edited_at') || '1970-01-01T00:00:00Z';
+    const localTime = new Date(localEditedAt).getTime();
 
-      // 画面を強制再描画
+    if (localTime > gistTime) {
+      // ── ローカルの編集の方が新しい → アップロード ──
+      if (state.selectedId) {
+        const idx = state.airports.findIndex(a => a.id === state.selectedId);
+        if (idx !== -1) {
+          const rawBody = watchSelectMode
+            ? sanitizeHTML(_bodyBeforeSelectMode)
+            : sanitizeHTML(document.getElementById('editor-body').innerHTML);
+          state.airports[idx] = {
+            ...state.airports[idx],
+            body: rawBody,
+            watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
+          };
+        }
+      }
+      const content = JSON.stringify(state.airports, null, 2);
+      const putRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `token ${state.token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ files: { 'airports.json': { content } } })
+      });
+      if (!putRes.ok) throw new Error(putRes.status);
+      const updatedGist = await putRes.json();
+      localStorage.setItem('pw3_local', content);
+      // アップロード後はGistの新しい時刻を記録
+      localStorage.setItem('pw3_local_edited_at', updatedGist.updated_at);
+      setDirty(false);
+      toast('↑ Gistにアップロードしました');
+      if (window.PW3Bridge) {
+        window.PW3Bridge.syncWatch(content, state.selectedId || '');
+      }
+
+    } else {
+      // ── Gistの方が新しい → ダウンロード ──
+      const airports = JSON.parse(file.content);
+      state.airports = airports;
+      localStorage.setItem('pw3_local', JSON.stringify(airports));
+      // ダウンロード後はGistの時刻を記録
+      localStorage.setItem('pw3_local_edited_at', gist.updated_at);
+      setDirty(false);
       renderList();
       const currentId = state.selectedId;
       state.selectedId = null;
@@ -1484,40 +1520,9 @@ async function syncToGist() {
       } else if (state.airports.length > 0) {
         selectAirport(state.airports[0].id);
       }
-
-      toast('⇄ Gistから取得しました (' + gistAirports.length + ' airports)');
-
+      toast('↓ Gistからダウンロードしました');
       if (window.PW3Bridge) {
-        window.PW3Bridge.syncWatch(content, state.selectedId || '');
-      }
-
-    } else {
-      // ── ローカルが新しい → アップロード ──
-      // 編集中の内容をstate.airportsに反映（updatedAtは使わない）
-      if (state.selectedId) {
-        const idx = state.airports.findIndex(a => a.id === state.selectedId);
-        if (idx !== -1) {
-          const current = state.airports[idx];
-          const rawBody = watchSelectMode
-            ? sanitizeHTML(_bodyBeforeSelectMode)
-            : sanitizeHTML(document.getElementById('editor-body').innerHTML);
-          state.airports[idx] = {
-            ...current,
-            body: rawBody,
-            watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
-          };
-        }
-      }
-
-      const updatedGist = await uploadToGist(state.airports);
-      const content = JSON.stringify(state.airports, null, 2);
-      localStorage.setItem('pw3_local', content);
-      setLastSyncedAt(updatedGist.updated_at);
-      setDirty(false);
-
-      toast('⇄ Gistにアップロードしました (' + state.airports.length + ' airports)');
-
-      if (window.PW3Bridge) {
+        const content = JSON.stringify(airports, null, 2);
         window.PW3Bridge.syncWatch(content, state.selectedId || '');
       }
     }
