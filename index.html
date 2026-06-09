@@ -176,6 +176,33 @@
   .modal-hint { font-size: 11px; color: var(--c-text3); margin-bottom: 16px; font-family: var(--font-mono); line-height: 1.6; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+  /* ── WATCH SELECT MODE ── */
+  .watch-select-mode .rich-editor { cursor: default !important; }
+  .watch-select-mode #editor-body > * {
+    position: relative;
+    padding-left: 20px !important;
+    margin-left: -6px;
+    border-radius: 3px;
+    cursor: pointer !important;
+    transition: background 0.1s;
+  }
+  .watch-select-mode #editor-body > *::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 70%;
+    border-radius: 2px;
+    background: var(--c-border);
+  }
+  .watch-select-mode #editor-body > *.watch-selected {
+    background: #e8eff6 !important;
+  }
+  .watch-select-mode #editor-body > *.watch-selected::before {
+    background: var(--c-accent) !important;
+  }
   /* ── SECTION HEADER ── */
   .section-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; color: var(--c-text3); text-transform: uppercase; padding: 8px 14px 4px; }
 
@@ -349,6 +376,13 @@
               </div>
               <div class="tb-sep"></div>
               <button class="tb-btn" data-cmd="removeFormat" title="書式クリア">CLR</button>
+              <div class="tb-sep"></div>
+              <button class="tb-btn" id="btn-watch-select-mode" title="Watch転送する行を選択">⌚ 選択</button>
+            </div>
+            <!-- Watch選択モード時のヒント -->
+            <div id="watch-select-hint" style="display:none;padding:4px 14px;background:#e8eff6;border-bottom:1px solid var(--c-border2);font-size:11px;font-family:var(--font-mono);color:var(--c-accent);display:flex;align-items:center;gap:8px;">
+              <span>⌚ Watch転送モード：行をタップして選択（青＝選択済）</span>
+              <button class="btn btn-ghost btn-sm" id="btn-watch-select-done">完了</button>
             </div>
             <div class="rich-editor" id="editor-body" contenteditable="true" spellcheck="false" data-placeholder="HTML本文を入力（空港PIN、ゲート情報など）..."></div>
           </div>
@@ -411,7 +445,7 @@
                   <div class="tb-sep"></div>
                   <button class="tb-btn" data-cmd="removeFormat" data-target="watch">CLR</button>
                   <div class="tb-sep"></div>
-                  <button class="tb-btn" id="btn-copy-from-body" title="BODYからwatchBodyにコピー（先頭のみ）">← FROM BODY</button>
+                  <button class="tb-btn" id="btn-copy-from-body" title="BODYの選択行 or 全文をWatchに転送">← FROM BODY</button>
                 </div>
                 <div class="rich-editor" id="editor-watch" contenteditable="true" spellcheck="false"
                      style="background:#111;color:#eee;font-family:var(--font-mono);font-size:13px;"
@@ -925,16 +959,88 @@ document.getElementById('apply-watch-bg').addEventListener('click', () => {
   markDirty();
 });
 
+// ══════════════════════════════════════════
+// WATCH 選択モード
+// ══════════════════════════════════════════
+let watchSelectMode = false;
+
+function enterWatchSelectMode() {
+  watchSelectMode = true;
+  document.getElementById('editor-body').contentEditable = 'false';
+  document.getElementById('body-section').classList.add('watch-select-mode');
+  document.getElementById('watch-select-hint').style.display = 'flex';
+  document.getElementById('btn-watch-select-mode').classList.add('active');
+
+  // 各ブロック要素にクリックリスナーを付ける
+  const editor = document.getElementById('editor-body');
+  Array.from(editor.children).forEach(el => {
+    el.addEventListener('click', toggleWatchSelect);
+  });
+}
+
+function exitWatchSelectMode() {
+  watchSelectMode = false;
+  document.getElementById('editor-body').contentEditable = 'true';
+  document.getElementById('body-section').classList.remove('watch-select-mode');
+  document.getElementById('watch-select-hint').style.display = 'none';
+  document.getElementById('btn-watch-select-mode').classList.remove('active');
+
+  const editor = document.getElementById('editor-body');
+  Array.from(editor.children).forEach(el => {
+    el.removeEventListener('click', toggleWatchSelect);
+  });
+}
+
+function toggleWatchSelect(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  this.classList.toggle('watch-selected');
+}
+
+function getSelectedWatchLines() {
+  const editor = document.getElementById('editor-body');
+  const selected = editor.querySelectorAll('.watch-selected');
+  if (selected.length === 0) return null; // 選択なし
+  return Array.from(selected).map(el => {
+    // watch-selected クラスと padding-left を除去したクリーンなHTML
+    const clone = el.cloneNode(true);
+    clone.classList.remove('watch-selected');
+    clone.style.paddingLeft = '';
+    clone.style.marginLeft = '';
+    return clone.outerHTML;
+  }).join('\n');
+}
+
+document.getElementById('btn-watch-select-mode').addEventListener('click', () => {
+  watchSelectMode ? exitWatchSelectMode() : enterWatchSelectMode();
+});
+
+document.getElementById('btn-watch-select-done').addEventListener('click', () => {
+  exitWatchSelectMode();
+  // WATCHタブに切り替え
+  showEditorTab('watch');
+  toast('Watch転送モード終了 — WATCHタブで「← FROM BODY」を押して転送');
+});
+
+// FROM BODY ボタン：選択行があれば選択行のみ、なければ全文をコピー
 document.getElementById('btn-copy-from-body').addEventListener('click', () => {
+  const selectedHTML = getSelectedWatchLines();
   const bodyHTML = document.getElementById('editor-body').innerHTML;
-  // take first 400 chars of text
-  const tmp = document.createElement('div');
-  tmp.innerHTML = bodyHTML;
-  const text = tmp.innerText.slice(0, 300);
-  document.getElementById('editor-watch').innerHTML = `<p>${text.replace(/\n/g,'<br>')}</p>`;
+
+  let transferHTML;
+  if (selectedHTML) {
+    // 選択行のみ転送（書式・色・フォントすべて保持）
+    transferHTML = selectedHTML;
+    toast('選択行(' + document.querySelectorAll('.watch-selected').length + '行)をWatchに転送');
+  } else {
+    // 選択なし → 全文転送
+    transferHTML = bodyHTML;
+    toast('全文をWatchに転送');
+  }
+
+  document.getElementById('editor-watch').innerHTML = transferHTML;
   markDirty();
   updateWatchPreview();
-  toast('BODYから先頭テキストをコピーしました');
 });
 
 // ══════════════════════════════════════════
