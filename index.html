@@ -834,20 +834,6 @@ document.getElementById('apply-highlight-body').addEventListener('click', () => 
   applyHighlight(editor, document.getElementById('highlight-picker-body').value);
   markDirty();
 });
-document.getElementById('apply-color-watch').addEventListener('click', () => {
-  const editor = document.getElementById('editor-watch');
-  editor.focus();
-  execCmd('foreColor', document.getElementById('color-picker-watch').value);
-  markDirty();
-  updateWatchPreview();
-});
-document.getElementById('apply-highlight-watch').addEventListener('click', () => {
-  const editor = document.getElementById('editor-watch');
-  applyHighlight(editor, document.getElementById('highlight-picker-watch').value);
-  markDirty();
-  updateWatchPreview();
-});
-
 setupToolbar('toolbar-body', 'editor-body');
 setupToolbar('toolbar-watch', 'watch-direct-editor');
 
@@ -950,8 +936,6 @@ document.getElementById('apply-highlight-watch').addEventListener('click', () =>
 // ══════════════════════════════════════════
 // WATCH 選択モード
 // ══════════════════════════════════════════
-let watchSelectMode = false;
-let _bodyBeforeSelectMode = ''; // 選択モード前のHTML（復元用）
 
 // HTMLをサニタイズ（watch-selected クラス・選択モード用スタイルを除去）
 function sanitizeHTML(html) {
@@ -962,61 +946,82 @@ function sanitizeHTML(html) {
     el.style.paddingLeft = '';
     el.style.marginLeft = '';
   });
-  // 空クラス属性を除去
   tmp.querySelectorAll('[class=""]').forEach(el => el.removeAttribute('class'));
   return tmp.innerHTML;
 }
 
-// BODYのHTMLをbr区切りで行単位のdivに分割
-function splitBodyIntoDivs(editor) {
-  // 現在のHTMLを保存
-  _bodyBeforeSelectMode = editor.innerHTML;
+// ══════════════════════════════════════════
+// WATCH 選択モード（完全書き直し版）
+// ──────────────────────────────────────────
+// 方針：HTMLを一度「行の配列」に展開してから
+//       各行を選択可能な<div>として表示する。
+//       <br>・<div>・<p>・ネスト全て対応。
+// ══════════════════════════════════════════
+let watchSelectMode = false;
+let _bodyBeforeSelectMode = '';
 
-  // 全内容を取得してbr区切りで行に分割
+// DOMツリーを再帰的に走査して「行HTML」の配列を返す
+// 各行はインラインHTMLの文字列（<br>・ブロック要素で区切る）
+function htmlToLines(html) {
+  // まずHTMLを正規化
+  const normalized = html
+    .replace(/<br\s*\/?>/gi, '\n__BR__\n')
+    .replace(/<\/div>/gi, '\n__BR__\n')
+    .replace(/<\/p>/gi, '\n__BR__\n')
+    .replace(/<\/h[1-6]>/gi, '\n__BR__\n')
+    .replace(/<div[^>]*>/gi, '')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<h([1-6])[^>]*>/gi, '');
+
+  // __BR__ で分割
+  const parts = normalized.split('__BR__');
   const lines = [];
-  const children = Array.from(editor.childNodes);
-
-  let currentGroup = document.createElement('div');
-
-  children.forEach(node => {
-    if (node.nodeName === 'BR') {
-      // brで改行 → 現在のグループを確定して新しいグループへ
-      if (currentGroup.childNodes.length > 0) {
-        lines.push(currentGroup);
-        currentGroup = document.createElement('div');
-      } else {
-        // 空行
-        const emptyDiv = document.createElement('div');
-        emptyDiv.innerHTML = '<br>';
-        lines.push(emptyDiv);
-      }
-    } else if (node.nodeName === 'DIV' || node.nodeName === 'P' ||
-               node.nodeName === 'H1' || node.nodeName === 'H2' || node.nodeName === 'H3') {
-      // ブロック要素はそのまま1行として扱う
-      if (currentGroup.childNodes.length > 0) {
-        lines.push(currentGroup);
-        currentGroup = document.createElement('div');
-      }
-      lines.push(node.cloneNode(true));
+  parts.forEach(part => {
+    const trimmed = part.trim();
+    if (trimmed === '' || trimmed === '\n') {
+      lines.push(''); // 空行
     } else {
-      // インライン要素・テキストは現在のグループに追加
-      currentGroup.appendChild(node.cloneNode(true));
+      lines.push(trimmed);
     }
   });
 
-  if (currentGroup.childNodes.length > 0) lines.push(currentGroup);
+  // 末尾の連続空行を1つにまとめる
+  const result = [];
+  let lastWasEmpty = false;
+  lines.forEach(line => {
+    if (line === '') {
+      if (!lastWasEmpty) result.push('');
+      lastWasEmpty = true;
+    } else {
+      result.push(line);
+      lastWasEmpty = false;
+    }
+  });
+  return result;
+}
 
-  // エディタをクリアして分割したdivで埋め直す
+// 行配列からselectable divを作ってエディタに展開
+function splitBodyIntoDivs(editor) {
+  _bodyBeforeSelectMode = editor.innerHTML;
+
+  const lines = htmlToLines(editor.innerHTML);
+
   editor.innerHTML = '';
-  lines.forEach(div => {
-    editor.appendChild(div);
+  lines.forEach(lineHTML => {
+    const div = document.createElement('div');
+    if (lineHTML === '') {
+      div.innerHTML = '&nbsp;'; // 空行は選択可能なスペース
+      div.dataset.empty = 'true';
+    } else {
+      div.innerHTML = lineHTML;
+    }
     div.addEventListener('click', toggleWatchSelect);
+    editor.appendChild(div);
   });
 }
 
-// 選択モード用divをbr区切りの元の形に戻す（ただし選択状態はクリア）
+// 選択モード終了：元のHTMLに戻す
 function restoreBodyFromDivs(editor) {
-  // 保存しておいた元のHTMLに戻す（サニタイズして）
   editor.innerHTML = sanitizeHTML(_bodyBeforeSelectMode);
   _bodyBeforeSelectMode = '';
 }
@@ -1028,18 +1033,13 @@ function enterWatchSelectMode() {
   document.getElementById('body-section').classList.add('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'flex';
   document.getElementById('btn-watch-select-mode').classList.add('active');
-
-  // br区切りを行単位divに分割
   splitBodyIntoDivs(editor);
 }
 
 function exitWatchSelectMode() {
   watchSelectMode = false;
   const editor = document.getElementById('editor-body');
-
-  // 分割したdivを元のbr構造に戻す
   restoreBodyFromDivs(editor);
-
   editor.contentEditable = 'true';
   document.getElementById('body-section').classList.remove('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'none';
@@ -1056,13 +1056,17 @@ function getSelectedWatchLines() {
   const editor = document.getElementById('editor-body');
   const selected = editor.querySelectorAll('.watch-selected');
   if (selected.length === 0) return null;
-  return Array.from(selected).map(el => {
-    const clone = el.cloneNode(true);
-    clone.classList.remove('watch-selected');
-    clone.style.paddingLeft = '';
-    clone.style.marginLeft = '';
-    return clone.outerHTML;
-  }).join('\n');
+  return Array.from(selected)
+    .filter(el => !el.dataset.empty) // 空行は除外
+    .map(el => {
+      const clone = el.cloneNode(true);
+      clone.classList.remove('watch-selected');
+      clone.style.paddingLeft = '';
+      clone.style.marginLeft = '';
+      return clone.innerHTML; // outerHTMLではなくinnerHTML（divタグ自体は不要）
+    })
+    .filter(html => html.trim() && html.trim() !== '&nbsp;')
+    .join('<br>');
 }
 
 document.getElementById('btn-watch-select-mode').addEventListener('click', () => {
