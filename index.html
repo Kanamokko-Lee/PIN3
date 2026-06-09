@@ -1365,8 +1365,8 @@ async function syncToGist() {
 }
 
 document.getElementById('btn-sync-all').addEventListener('click', async () => {
-  // save current if dirty first
-  if (state.dirty) saveLocal();
+  // 常にSAVE LOCALを実行してから同期（dirtyフラグに関わらず）
+  saveLocal();
   await syncToGist();
 });
 
