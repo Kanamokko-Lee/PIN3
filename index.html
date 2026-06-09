@@ -1401,6 +1401,8 @@ document.getElementById('btn-revert').addEventListener('click', () => {
 // ══════════════════════════════════════════
 // GIST API
 // ══════════════════════════════════════════
+
+// ── Gistからダウンロードのみ（↺ボタン用）──
 async function fetchGist() {
   if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
@@ -1411,9 +1413,17 @@ async function fetchGist() {
     const gist = await res.json();
     const file = gist.files['airports.json'];
     if (!file) throw new Error('airports.json not found in gist');
-    state.airports = JSON.parse(file.content);
+    const gistAirports = JSON.parse(file.content);
+
+    // Gistのデータでローカルを上書き（アップロードは一切しない）
+    state.airports = gistAirports;
+    localStorage.setItem('pw3_local', JSON.stringify(gistAirports));
     renderList();
-    if (state.airports.length > 0 && !state.selectedId) selectAirport(state.airports[0].id);
+    if (state.airports.length > 0 && !state.selectedId) {
+      selectAirport(state.airports[0].id);
+    } else if (state.selectedId) {
+      renderEditor();
+    }
     toast('Gistから読み込み完了 (' + state.airports.length + ' airports)');
     updateGistDot();
   } catch(e) {
@@ -1421,10 +1431,16 @@ async function fetchGist() {
   }
 }
 
+// ── スマート同期（⇄ 同期ボタン用）──
+// 1. 現在の編集内容をローカルに保存（updatedAt更新）
+// 2. Gistから取得
+// 3. 空港ごとにupdatedAtを比較して新しい方を採用
+// 4. 結果をGistにアップロード
+// 5. 結果をローカルに保存
 async function syncToGist() {
   if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
-    // まずGistの最新データを取得
+    // Step1: Gistから最新データを取得
     const getRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
     });
@@ -1432,45 +1448,35 @@ async function syncToGist() {
     const gist = await getRes.json();
     const file = gist.files['airports.json'];
     if (!file) throw new Error('airports.json not found');
-
     const gistAirports = JSON.parse(file.content);
 
-    // 空港ごとにupdatedAtを比較して新しい方を採用
-    const gistMap = new Map(gistAirports.map(a => [a.id, a]));
+    // Step2: 空港ごとにupdatedAtを比較して新しい方を採用
+    const gistMap  = new Map(gistAirports.map(a => [a.id, a]));
     const localMap = new Map(state.airports.map(a => [a.id, a]));
+    const allIds   = new Set([...gistMap.keys(), ...localMap.keys()]);
 
-    // 全IDを収集（Gist・ローカル両方）
-    const allIds = new Set([...gistMap.keys(), ...localMap.keys()]);
     const merged = [];
-
     allIds.forEach(id => {
-      const gistA  = gistMap.get(id);
-      const localA = localMap.get(id);
-
-      if (!gistA)  { merged.push(localA); return; } // ローカルのみ
-      if (!localA) { merged.push(gistA);  return; } // Gistのみ
-
-      // 両方にある → updatedAtで比較
-      const gistTime  = gistA.updatedAt  ? new Date(gistA.updatedAt).getTime()  : 0;
-      const localTime = localA.updatedAt ? new Date(localA.updatedAt).getTime() : 0;
-
-      if (localTime >= gistTime) {
-        merged.push(localA); // ローカルが新しい
-      } else {
-        merged.push(gistA);  // Gistが新しい
-      }
+      const g = gistMap.get(id);
+      const l = localMap.get(id);
+      if (!g) { merged.push(l); return; }  // ローカルのみ
+      if (!l) { merged.push(g); return; }  // Gistのみ
+      // 両方ある → updatedAtで比較
+      const gTime = g.updatedAt ? new Date(g.updatedAt).getTime() : 0;
+      const lTime = l.updatedAt ? new Date(l.updatedAt).getTime() : 0;
+      merged.push(lTime >= gTime ? l : g);
     });
 
-    // 元の並び順を維持（ローカルの順序を優先）
+    // ローカルの順序を維持
     const localOrder = state.airports.map(a => a.id);
-    const gistOnlyIds = [...allIds].filter(id => !localMap.has(id));
-    const orderedIds = [...localOrder, ...gistOnlyIds];
-    const mergedMap = new Map(merged.map(a => [a.id, a]));
-    const finalAirports = orderedIds.map(id => mergedMap.get(id)).filter(Boolean);
+    const extraIds   = [...allIds].filter(id => !localMap.has(id));
+    const finalIds   = [...localOrder, ...extraIds];
+    const mergedMap  = new Map(merged.map(a => [a.id, a]));
+    const final      = finalIds.map(id => mergedMap.get(id)).filter(Boolean);
 
-    // Gistに書き込む
-    const content = JSON.stringify(finalAirports, null, 2);
-    const patchRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    // Step3: GistにアップロードS
+    const content = JSON.stringify(final, null, 2);
+    const putRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       method: 'PATCH',
       headers: {
         Authorization: `token ${state.token}`,
@@ -1479,20 +1485,15 @@ async function syncToGist() {
       },
       body: JSON.stringify({ files: { 'airports.json': { content } } })
     });
-    if (!patchRes.ok) throw new Error(patchRes.status);
+    if (!putRes.ok) throw new Error(putRes.status);
 
-    // ローカルstateを更新
-    state.airports = finalAirports;
+    // Step4: ローカルに保存
+    state.airports = final;
     localStorage.setItem('pw3_local', content);
-
-    // 現在選択中の空港を再描画
-    if (state.selectedId) {
-      const updated = state.airports.find(a => a.id === state.selectedId);
-      if (updated) renderEditor();
-    }
     renderList();
+    if (state.selectedId) renderEditor();
 
-    toast('⇄ スマート同期完了 (' + finalAirports.length + ' airports)');
+    toast('⇄ 同期完了 (' + final.length + ' airports)');
 
     if (window.PW3Bridge) {
       window.PW3Bridge.syncWatch(content, state.selectedId || '');
