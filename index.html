@@ -1420,14 +1420,32 @@ async function fetchGist() {
 }
 
 // ── スマート同期（⇄ 同期ボタン用）──
-// 1. 現在の編集内容をローカルに保存（updatedAt更新）
+// 1. 編集中データをstate.airportsに反映（updatedAtは既存値を保持）
 // 2. Gistから取得
 // 3. 空港ごとにupdatedAtを比較して新しい方を採用
 // 4. 結果をGistにアップロード
-// 5. 結果をローカルに保存
+// 5. 結果をローカルに保存・画面再描画
 async function syncToGist() {
   if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
+    // Step0: 編集中の内容をstate.airportsに反映
+    // ただしupdatedAtは既存の値を保持（新しく更新しない）
+    if (state.selectedId) {
+      const idx = state.airports.findIndex(a => a.id === state.selectedId);
+      if (idx !== -1) {
+        const current = state.airports[idx];
+        const rawBody = watchSelectMode
+          ? sanitizeHTML(_bodyBeforeSelectMode)
+          : sanitizeHTML(document.getElementById('editor-body').innerHTML);
+        state.airports[idx] = {
+          ...current,
+          body: rawBody,
+          watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
+          // updatedAt は既存の値をそのまま保持（上書きしない）
+        };
+      }
+    }
+
     // Step1: Gistから最新データを取得
     const getRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
@@ -1449,10 +1467,10 @@ async function syncToGist() {
       const l = localMap.get(id);
       if (!g) { merged.push(l); return; }  // ローカルのみ
       if (!l) { merged.push(g); return; }  // Gistのみ
-      // 両方ある → updatedAtで比較
+      // 両方ある → updatedAtで比較（同じまたはGistが新しければGistを採用）
       const gTime = g.updatedAt ? new Date(g.updatedAt).getTime() : 0;
       const lTime = l.updatedAt ? new Date(l.updatedAt).getTime() : 0;
-      merged.push(lTime >= gTime ? l : g);
+      merged.push(lTime > gTime ? l : g);  // ローカルが厳密に新しい時だけローカルを採用
     });
 
     // ローカルの順序を維持
@@ -1462,7 +1480,7 @@ async function syncToGist() {
     const mergedMap  = new Map(merged.map(a => [a.id, a]));
     const final      = finalIds.map(id => mergedMap.get(id)).filter(Boolean);
 
-    // Step3: GistにアップロードS
+    // Step3: Gistにアップロード
     const content = JSON.stringify(final, null, 2);
     const putRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       method: 'PATCH',
@@ -1475,17 +1493,16 @@ async function syncToGist() {
     });
     if (!putRes.ok) throw new Error(putRes.status);
 
-    // Step4: ローカルに保存
+    // Step4: ローカルに保存・強制再描画
     state.airports = final;
     localStorage.setItem('pw3_local', content);
+    setDirty(false);
 
-    // 必ず画面を強制再描画（キャッシュ・古いデータ表示を防ぐ）
     renderList();
     if (state.selectedId) {
-      // 現在選択中の空港を最新データで強制再描画
       const currentId = state.selectedId;
-      state.selectedId = null;  // いったんリセット
-      selectAirport(currentId); // 最新データで再選択・再描画
+      state.selectedId = null;
+      selectAirport(currentId);
     } else if (final.length > 0) {
       selectAirport(final[0].id);
     }
@@ -1501,8 +1518,6 @@ async function syncToGist() {
 }
 
 document.getElementById('btn-sync-all').addEventListener('click', async () => {
-  // 現在の編集内容をローカルに保存してから同期
-  saveLocal();
   await syncToGist();
 });
 
