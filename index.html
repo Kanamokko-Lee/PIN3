@@ -242,7 +242,6 @@
     </div>
     <div id="header-controls">
       <span id="gist-status-dot" style="width:8px;height:8px;border-radius:50%;background:#666;display:inline-block;" title="Gist未接続"></span>
-      <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-reload" title="Gistから再読み込み">↺</button>
       <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-settings">⚙ GIST</button>
       <button class="btn btn-primary btn-sm" id="btn-sync-all">⇔ 同期</button>
       <button class="btn btn-ghost btn-sm" style="color:#aaa;border-color:#444;" id="btn-new">+ NEW</button>
@@ -468,8 +467,6 @@
           <div id="editor-footer">
             <span id="save-status">未保存の変更はありません</span>
             <button class="btn btn-ghost btn-sm" id="btn-undo" title="⌘Z">↩ UNDO</button>
-            <button class="btn btn-ghost btn-sm" id="btn-revert">REVERT</button>
-            <button class="btn btn-primary btn-sm" id="btn-save-local">SAVE LOCAL</button>
           </div>
 
         </div><!-- /editor-inner -->
@@ -958,23 +955,6 @@ let undoTimer = null;
 
 document.getElementById('btn-undo').addEventListener('click', performUndo);
 
-// ── Mac keyboard shortcuts ──
-document.addEventListener('keydown', e => {
-  const meta = e.metaKey || e.ctrlKey;
-  if (!meta) return;
-  const active = document.activeElement;
-  const isEditor = active.classList.contains('rich-editor');
-  if (isEditor) {
-    if (e.key === 'b') { e.preventDefault(); execCmd('bold'); }
-    if (e.key === 'i') { e.preventDefault(); execCmd('italic'); }
-    if (e.key === 'u') { e.preventDefault(); execCmd('underline'); }
-    if (e.key === 'z') { e.preventDefault(); performUndo(); }
-    if (e.key === 's') { e.preventDefault(); saveLocal(); }
-  } else {
-    if (e.key === 's') { e.preventDefault(); saveLocal(); }
-  }
-});
-
 // ══════════════════════════════════════════
 // WATCH PREVIEW
 // ══════════════════════════════════════════
@@ -1392,10 +1372,18 @@ function saveLocal() {
   localStorage.setItem('pw3_local', JSON.stringify(state.airports));
 }
 
-document.getElementById('btn-save-local').addEventListener('click', saveLocal);
-document.getElementById('btn-revert').addEventListener('click', () => {
-  if (!confirm('変更を破棄しますか？')) return;
-  renderEditor();
+// ── ⌘S キーボードショートカット ──
+document.addEventListener('keydown', e => {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) return;
+  const active = document.activeElement;
+  const isEditor = active.classList.contains('rich-editor') || active.id === 'watch-direct-editor';
+  if (isEditor) {
+    if (e.key === 'b') { e.preventDefault(); execCmd('bold'); }
+    if (e.key === 'i') { e.preventDefault(); execCmd('italic'); }
+    if (e.key === 'u') { e.preventDefault(); execCmd('underline'); }
+    if (e.key === 'z') { e.preventDefault(); performUndo(); }
+  }
 });
 
 // ══════════════════════════════════════════
@@ -1490,8 +1478,17 @@ async function syncToGist() {
     // Step4: ローカルに保存
     state.airports = final;
     localStorage.setItem('pw3_local', content);
+
+    // 必ず画面を強制再描画（キャッシュ・古いデータ表示を防ぐ）
     renderList();
-    if (state.selectedId) renderEditor();
+    if (state.selectedId) {
+      // 現在選択中の空港を最新データで強制再描画
+      const currentId = state.selectedId;
+      state.selectedId = null;  // いったんリセット
+      selectAirport(currentId); // 最新データで再選択・再描画
+    } else if (final.length > 0) {
+      selectAirport(final[0].id);
+    }
 
     toast('⇄ 同期完了 (' + final.length + ' airports)');
 
@@ -1697,11 +1694,6 @@ document.getElementById('search-input').addEventListener('input', renderList);
 // ══════════════════════════════════════════
 // RELOAD（Gistから再読み込み）
 // ══════════════════════════════════════════
-document.getElementById('btn-reload').addEventListener('click', async () => {
-  if (!state.token || !state.gistId) { toast('Gistが未設定です', 'warn'); return; }
-  toast('再読み込み中...');
-  await fetchGist();
-});
 function autoSelectNearestAirport(lat, lng) {
   if (!state.airports.length) return;
   let nearest = null;
