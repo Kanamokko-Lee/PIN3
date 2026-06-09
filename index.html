@@ -662,10 +662,12 @@ function renderEditor() {
   setDirty(false);
   updateWatchPreview();
 
-  // 記憶した選択行があれば同期ボタンを表示
-  const savedIndices = loadSelectedLineIndices(a.id);
-  document.getElementById('btn-sync-from-selection').style.display =
-    savedIndices.length > 0 ? 'inline-block' : 'none';
+  // watchSelectedLines が空港データにあれば同期ボタンを表示
+  const syncBtn = document.getElementById('btn-sync-from-selection');
+  if (syncBtn) {
+    syncBtn.style.display = (a.watchSelectedLines && a.watchSelectedLines.length > 0)
+      ? 'inline-block' : 'none';
+  }
 }
 
 // ══════════════════════════════════════════
@@ -1181,13 +1183,6 @@ document.getElementById('btn-watch-select-done').addEventListener('click', () =>
   const selectedIndices = selected.map(el => parseInt(el.dataset.lineIndex));
   const selectedHTML = getSelectedWatchLines();
 
-  // 選択行インデックスを記憶
-  if (selectedIndices.length > 0 && state.selectedId) {
-    saveSelectedLineIndices(state.selectedId, selectedIndices);
-    // 同期ボタンを表示
-    document.getElementById('btn-sync-from-selection').style.display = 'inline-block';
-  }
-
   exitWatchSelectMode();
   showEditorTab('watch');
 
@@ -1196,6 +1191,23 @@ document.getElementById('btn-watch-select-done').addEventListener('click', () =>
     const watchEditor = document.getElementById('watch-direct-editor');
     watchEditor.innerHTML = cleaned;
     document.getElementById('editor-watch').innerHTML = cleaned;
+
+    // watchSelectedLines を空港データに保存（Gist経由でiPhoneにも届く）
+    if (state.selectedId) {
+      const idx = state.airports.findIndex(a => a.id === state.selectedId);
+      if (idx !== -1) {
+        state.airports[idx] = {
+          ...state.airports[idx],
+          watchSelectedLines: selectedIndices,
+          watchBody: cleaned,
+          updatedAt: new Date().toISOString(),
+        };
+        localStorage.setItem('pw3_local', JSON.stringify(state.airports));
+        // 同期ボタンを表示
+        document.getElementById('btn-sync-from-selection').style.display = 'inline-block';
+      }
+    }
+
     markDirty();
     toast('選択行をWatchに転送しました（日付除去済）');
   } else {
@@ -1206,13 +1218,14 @@ document.getElementById('btn-watch-select-done').addEventListener('click', () =>
 // ── ⇄ 選択行同期ボタン：記憶した行でWatchを更新 ──
 document.getElementById('btn-sync-from-selection').addEventListener('click', () => {
   if (!state.selectedId) return;
-  const indices = loadSelectedLineIndices(state.selectedId);
+  const airport = state.airports.find(a => a.id === state.selectedId);
+  const indices = airport?.watchSelectedLines || [];
+
   if (indices.length === 0) {
     toast('記憶した選択行がありません。先に⌚選択で行を選んでください', 'warn');
     return;
   }
 
-  // 現在のbodyHTMLから行を再構築
   const currentLines = htmlToLineHTMLs(
     sanitizeHTML(document.getElementById('editor-body').innerHTML)
   );
@@ -1264,7 +1277,6 @@ function collectEditorData() {
   const a = getSelected();
   if (!a) return null;
 
-  // 選択モード中なら元のHTMLを使う
   const rawBody = watchSelectMode
     ? sanitizeHTML(_bodyBeforeSelectMode)
     : sanitizeHTML(document.getElementById('editor-body').innerHTML);
@@ -1281,8 +1293,8 @@ function collectEditorData() {
     tabColor: getSelectedColor(),
     body: rawBody,
     watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
+    updatedAt: new Date().toISOString(), // 更新日時を記録
   };
-  // 不要フィールドを削除
   delete data.name;
   delete data.sourceHTML;
   delete data.watchPages;
@@ -1358,15 +1370,19 @@ function saveLocal() {
     const mergedWatch = mergeWatchBody(oldAirport.body, data.body, data.watchBody);
     if (mergedWatch !== data.watchBody) {
       data.watchBody = mergedWatch;
-      // エディタのwatchBodyも更新
       document.getElementById('editor-watch').innerHTML = mergedWatch;
-      updateWatchPreview();
+      document.getElementById('watch-direct-editor').innerHTML = mergedWatch;
       toast('ローカルに保存しました (' + data.id + ') — Watch同期済み');
     } else {
       toast('ローカルに保存しました (' + data.id + ')');
     }
   } else {
     toast('ローカルに保存しました (' + data.id + ')');
+  }
+
+  // watchSelectedLines を保持（collectEditorDataで消えないように）
+  if (!data.watchSelectedLines && oldAirport.watchSelectedLines) {
+    data.watchSelectedLines = oldAirport.watchSelectedLines;
   }
 
   state.airports[idx] = data;
@@ -1408,8 +1424,53 @@ async function fetchGist() {
 async function syncToGist() {
   if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
-    const content = JSON.stringify(state.airports, null, 2);
-    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    // まずGistの最新データを取得
+    const getRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!getRes.ok) throw new Error(getRes.status);
+    const gist = await getRes.json();
+    const file = gist.files['airports.json'];
+    if (!file) throw new Error('airports.json not found');
+
+    const gistAirports = JSON.parse(file.content);
+
+    // 空港ごとにupdatedAtを比較して新しい方を採用
+    const gistMap = new Map(gistAirports.map(a => [a.id, a]));
+    const localMap = new Map(state.airports.map(a => [a.id, a]));
+
+    // 全IDを収集（Gist・ローカル両方）
+    const allIds = new Set([...gistMap.keys(), ...localMap.keys()]);
+    const merged = [];
+
+    allIds.forEach(id => {
+      const gistA  = gistMap.get(id);
+      const localA = localMap.get(id);
+
+      if (!gistA)  { merged.push(localA); return; } // ローカルのみ
+      if (!localA) { merged.push(gistA);  return; } // Gistのみ
+
+      // 両方にある → updatedAtで比較
+      const gistTime  = gistA.updatedAt  ? new Date(gistA.updatedAt).getTime()  : 0;
+      const localTime = localA.updatedAt ? new Date(localA.updatedAt).getTime() : 0;
+
+      if (localTime >= gistTime) {
+        merged.push(localA); // ローカルが新しい
+      } else {
+        merged.push(gistA);  // Gistが新しい
+      }
+    });
+
+    // 元の並び順を維持（ローカルの順序を優先）
+    const localOrder = state.airports.map(a => a.id);
+    const gistOnlyIds = [...allIds].filter(id => !localMap.has(id));
+    const orderedIds = [...localOrder, ...gistOnlyIds];
+    const mergedMap = new Map(merged.map(a => [a.id, a]));
+    const finalAirports = orderedIds.map(id => mergedMap.get(id)).filter(Boolean);
+
+    // Gistに書き込む
+    const content = JSON.stringify(finalAirports, null, 2);
+    const patchRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       method: 'PATCH',
       headers: {
         Authorization: `token ${state.token}`,
@@ -1418,15 +1479,26 @@ async function syncToGist() {
       },
       body: JSON.stringify({ files: { 'airports.json': { content } } })
     });
-    if (!res.ok) throw new Error(res.status);
-    toast('Gistに同期しました (' + state.airports.length + ' airports)');
+    if (!patchRes.ok) throw new Error(patchRes.status);
+
+    // ローカルstateを更新
+    state.airports = finalAirports;
     localStorage.setItem('pw3_local', content);
-    // iOSアプリ上ではWatchにも転送
+
+    // 現在選択中の空港を再描画
+    if (state.selectedId) {
+      const updated = state.airports.find(a => a.id === state.selectedId);
+      if (updated) renderEditor();
+    }
+    renderList();
+
+    toast('⇄ スマート同期完了 (' + finalAirports.length + ' airports)');
+
     if (window.PW3Bridge) {
       window.PW3Bridge.syncWatch(content, state.selectedId || '');
     }
   } catch(e) {
-    toast('Gist同期失敗: ' + e.message, 'err');
+    toast('同期失敗: ' + e.message, 'err');
   }
 }
 
