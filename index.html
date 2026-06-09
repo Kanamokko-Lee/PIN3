@@ -592,8 +592,8 @@ function renderEditor() {
 
   // rich editors
   document.getElementById('editor-body').innerHTML = a.body || '';
-  // watchBodyが空ならbodyをそのままコピー
-  document.getElementById('editor-watch').innerHTML = a.watchBody || a.body || '';
+  // watchBodyが空でもbodyを自動コピーしない（← FROM BODYボタンで明示的にコピー）
+  document.getElementById('editor-watch').innerHTML = a.watchBody || '';
 
   // activate correct tab
   showEditorTab(state.activeTab);
