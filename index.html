@@ -885,11 +885,39 @@ function setupToolbar(toolbarId, editorId) {
   editor.addEventListener('mouseup', () => updateToolbarState(toolbar, editor));
   editor.addEventListener('input', () => { markDirty(); if (editorId === 'editor-watch') updateWatchPreview(); });
 
-  // ── Enterキーを<br>に統一 ──
+  // ── Enterキーを<br>に統一（Safari対応）──
+  editor.addEventListener('keypress', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+
+      const br = document.createElement('br');
+      range.insertNode(br);
+
+      const next = br.nextSibling;
+      if (!next || (next.nodeType === 3 && next.textContent === '')) {
+        const extraBr = document.createElement('br');
+        br.parentNode.insertBefore(extraBr, next || null);
+      }
+
+      const newRange = document.createRange();
+      newRange.setStartAfter(br);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+
+      markDirty();
+    }
+  });
+
   editor.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      execCmd('insertHTML', '<br>');
+      e.stopPropagation();
     }
   });
 
