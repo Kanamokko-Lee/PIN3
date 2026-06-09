@@ -1390,22 +1390,20 @@ document.addEventListener('keydown', e => {
 // GIST API
 // ══════════════════════════════════════════
 
-// ── Gistからダウンロードのみ（↺ボタン用）──
+// ── fetchGist（起動時の初期ロード専用）──
 async function fetchGist() {
   if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
   try {
-    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
-      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
-    });
-    if (!res.ok) throw new Error(res.status);
-    const gist = await res.json();
+    const gist = await fetchGistData();
     const file = gist.files['airports.json'];
     if (!file) throw new Error('airports.json not found in gist');
     const gistAirports = JSON.parse(file.content);
 
-    // Gistのデータでローカルを上書き（アップロードは一切しない）
     state.airports = gistAirports;
-    localStorage.setItem('pw3_local', JSON.stringify(gistAirports));
+    const content = JSON.stringify(gistAirports, null, 2);
+    localStorage.setItem('pw3_local', content);
+    setLastSyncedAt(gist.updated_at);  // 同期日時を記録
+
     renderList();
     if (state.airports.length > 0 && !state.selectedId) {
       selectAirport(state.airports[0].id);
@@ -1419,98 +1417,109 @@ async function fetchGist() {
   }
 }
 
-// ── スマート同期（⇄ 同期ボタン用）──
-// 1. 編集中データをstate.airportsに反映（updatedAtは既存値を保持）
-// 2. Gistから取得
-// 3. 空港ごとにupdatedAtを比較して新しい方を採用
-// 4. 結果をGistにアップロード
-// 5. 結果をローカルに保存・画面再描画
-async function syncToGist() {
-  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
-  try {
-    // Step0: 編集中の内容をstate.airportsに反映
-    // ただしupdatedAtは既存の値を保持（新しく更新しない）
-    if (state.selectedId) {
-      const idx = state.airports.findIndex(a => a.id === state.selectedId);
-      if (idx !== -1) {
-        const current = state.airports[idx];
-        const rawBody = watchSelectMode
-          ? sanitizeHTML(_bodyBeforeSelectMode)
-          : sanitizeHTML(document.getElementById('editor-body').innerHTML);
-        state.airports[idx] = {
-          ...current,
-          body: rawBody,
-          watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
-          // updatedAt は既存の値をそのまま保持（上書きしない）
-        };
-      }
-    }
+// ── Gistのバージョン管理 ──
+// lastSyncedAt：最後にGistと同期した日時（localStorageに保存）
+function getLastSyncedAt() {
+  return localStorage.getItem('pw3_last_synced') || '1970-01-01T00:00:00Z';
+}
+function setLastSyncedAt(isoString) {
+  localStorage.setItem('pw3_last_synced', isoString);
+}
 
-    // Step1: Gistから最新データを取得
-    const getRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
-      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
-    });
-    if (!getRes.ok) throw new Error(getRes.status);
-    const gist = await getRes.json();
+// ── fetchGist（内部共通処理）──
+async function fetchGistData() {
+  const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+  });
+  if (!res.ok) throw new Error(res.status);
+  return await res.json();
+}
+
+async function uploadToGist(airports) {
+  const content = JSON.stringify(airports, null, 2);
+  const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `token ${state.token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ files: { 'airports.json': { content } } })
+  });
+  if (!res.ok) throw new Error(res.status);
+  return await res.json();
+}
+
+// ── スマート同期（⇄ 同期ボタン用）──
+async function syncToGist() {
+  if (!state.token || !state.gistId) {
+    toast('Gistトークンとidを設定してください', 'warn');
+    return;
+  }
+  try {
+    toast('同期中...');
+
+    // Gistの情報を取得
+    const gist = await fetchGistData();
+    const gistUpdatedAt  = new Date(gist.updated_at).getTime();
+    const lastSyncedAt   = new Date(getLastSyncedAt()).getTime();
     const file = gist.files['airports.json'];
     if (!file) throw new Error('airports.json not found');
-    const gistAirports = JSON.parse(file.content);
 
-    // Step2: 空港ごとにupdatedAtを比較して新しい方を採用
-    const gistMap  = new Map(gistAirports.map(a => [a.id, a]));
-    const localMap = new Map(state.airports.map(a => [a.id, a]));
-    const allIds   = new Set([...gistMap.keys(), ...localMap.keys()]);
+    if (gistUpdatedAt > lastSyncedAt) {
+      // ── Gistが新しい → ダウンロード ──
+      const gistAirports = JSON.parse(file.content);
+      state.airports = gistAirports;
+      const content = JSON.stringify(gistAirports, null, 2);
+      localStorage.setItem('pw3_local', content);
+      setLastSyncedAt(gist.updated_at);
+      updateGistDot();
 
-    const merged = [];
-    allIds.forEach(id => {
-      const g = gistMap.get(id);
-      const l = localMap.get(id);
-      if (!g) { merged.push(l); return; }  // ローカルのみ
-      if (!l) { merged.push(g); return; }  // Gistのみ
-      // 両方ある → updatedAtで比較（同じまたはGistが新しければGistを採用）
-      const gTime = g.updatedAt ? new Date(g.updatedAt).getTime() : 0;
-      const lTime = l.updatedAt ? new Date(l.updatedAt).getTime() : 0;
-      merged.push(lTime > gTime ? l : g);  // ローカルが厳密に新しい時だけローカルを採用
-    });
-
-    // ローカルの順序を維持
-    const localOrder = state.airports.map(a => a.id);
-    const extraIds   = [...allIds].filter(id => !localMap.has(id));
-    const finalIds   = [...localOrder, ...extraIds];
-    const mergedMap  = new Map(merged.map(a => [a.id, a]));
-    const final      = finalIds.map(id => mergedMap.get(id)).filter(Boolean);
-
-    // Step3: Gistにアップロード
-    const content = JSON.stringify(final, null, 2);
-    const putRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `token ${state.token}`,
-        Accept: 'application/vnd.github+json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ files: { 'airports.json': { content } } })
-    });
-    if (!putRes.ok) throw new Error(putRes.status);
-
-    // Step4: ローカルに保存・強制再描画
-    state.airports = final;
-    localStorage.setItem('pw3_local', content);
-    setDirty(false);
-
-    renderList();
-    if (state.selectedId) {
+      // 画面を強制再描画
+      renderList();
       const currentId = state.selectedId;
       state.selectedId = null;
-      selectAirport(currentId);
-    } else if (final.length > 0) {
-      selectAirport(final[0].id);
-    }
+      if (currentId && state.airports.find(a => a.id === currentId)) {
+        selectAirport(currentId);
+      } else if (state.airports.length > 0) {
+        selectAirport(state.airports[0].id);
+      }
 
-    toast('⇄ 同期完了 (' + final.length + ' airports)');
+      toast('⇄ Gistから取得しました (' + gistAirports.length + ' airports)');
 
-    if (window.PW3Bridge) {
-      window.PW3Bridge.syncWatch(content, state.selectedId || '');
+      if (window.PW3Bridge) {
+        window.PW3Bridge.syncWatch(content, state.selectedId || '');
+      }
+
+    } else {
+      // ── ローカルが新しい → アップロード ──
+      // 編集中の内容をstate.airportsに反映（updatedAtは使わない）
+      if (state.selectedId) {
+        const idx = state.airports.findIndex(a => a.id === state.selectedId);
+        if (idx !== -1) {
+          const current = state.airports[idx];
+          const rawBody = watchSelectMode
+            ? sanitizeHTML(_bodyBeforeSelectMode)
+            : sanitizeHTML(document.getElementById('editor-body').innerHTML);
+          state.airports[idx] = {
+            ...current,
+            body: rawBody,
+            watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
+          };
+        }
+      }
+
+      const updatedGist = await uploadToGist(state.airports);
+      const content = JSON.stringify(state.airports, null, 2);
+      localStorage.setItem('pw3_local', content);
+      setLastSyncedAt(updatedGist.updated_at);
+      setDirty(false);
+
+      toast('⇄ Gistにアップロードしました (' + state.airports.length + ' airports)');
+
+      if (window.PW3Bridge) {
+        window.PW3Bridge.syncWatch(content, state.selectedId || '');
+      }
     }
   } catch(e) {
     toast('同期失敗: ' + e.message, 'err');
