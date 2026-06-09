@@ -305,6 +305,15 @@
               <button class="tb-btn" data-cmd="italic" title="⌘I"><i>I</i></button>
               <button class="tb-btn" data-cmd="underline" title="⌘U"><u>U</u></button>
               <div class="tb-sep"></div>
+              <select class="tb-select" id="fontfamily-body" title="フォント">
+                <option value="">フォント</option>
+                <option value="-apple-system,sans-serif">システム</option>
+                <option value="'Helvetica Neue',Helvetica,sans-serif">Helvetica</option>
+                <option value="Arial,sans-serif">Arial</option>
+                <option value="Georgia,serif">Georgia</option>
+                <option value="'Courier New',monospace">Courier</option>
+                <option value="'IBM Plex Mono',monospace">IBM Mono</option>
+              </select>
               <select class="tb-select" id="fontsize-body" title="フォントサイズ">
                 <option value="">サイズ</option>
                 <option value="10">10</option>
@@ -353,6 +362,15 @@
                   <button class="tb-btn" data-cmd="italic" data-target="watch"><i>I</i></button>
                   <button class="tb-btn" data-cmd="underline" data-target="watch"><u>U</u></button>
                   <div class="tb-sep"></div>
+                  <select class="tb-select" id="fontfamily-watch" title="フォント">
+                    <option value="">フォント</option>
+                    <option value="-apple-system,sans-serif">システム</option>
+                    <option value="'Helvetica Neue',Helvetica,sans-serif">Helvetica</option>
+                    <option value="Arial,sans-serif">Arial</option>
+                    <option value="Georgia,serif">Georgia</option>
+                    <option value="'Courier New',monospace">Courier</option>
+                    <option value="'IBM Plex Mono',monospace">IBM Mono</option>
+                  </select>
                   <select class="tb-select" id="fontsize-watch" title="フォントサイズ">
                     <option value="">サイズ</option>
                     <option value="10">10</option>
@@ -723,11 +741,37 @@ function setupToolbar(toolbarId, editorId) {
   });
 
   // フォントサイズ select
-  const fsSelect = toolbar.querySelector('.tb-select');
+  const fsSelect = toolbar.querySelector('.tb-select[id^="fontsize"]');
   if (fsSelect) {
     fsSelect.addEventListener('change', e => {
       const px = e.target.value;
       if (px) applyFontSize(editor, px);
+      e.target.value = '';
+      markDirty();
+      if (editorId === 'editor-watch') updateWatchPreview();
+    });
+  }
+
+  // フォントファミリー select
+  const ffSelect = toolbar.querySelector('.tb-select[id^="fontfamily"]');
+  if (ffSelect) {
+    ffSelect.addEventListener('change', e => {
+      const family = e.target.value;
+      if (!family) return;
+      editor.focus();
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        const range = sel.getRangeAt(0);
+        const span = document.createElement('span');
+        span.style.fontFamily = family;
+        try {
+          range.surroundContents(span);
+        } catch(err) {
+          const frag = range.extractContents();
+          span.appendChild(frag);
+          range.insertNode(span);
+        }
+      }
       e.target.value = '';
       markDirty();
       if (editorId === 'editor-watch') updateWatchPreview();
@@ -909,7 +953,7 @@ document.getElementById('editor-body').addEventListener('input', markDirty);
 function collectEditorData() {
   const a = getSelected();
   if (!a) return null;
-  return {
+  const data = {
     ...a,
     id: document.getElementById('f-id').value.trim().toUpperCase() || a.id,
     short: document.getElementById('f-short').value.trim(),
@@ -922,6 +966,11 @@ function collectEditorData() {
     body: document.getElementById('editor-body').innerHTML,
     watchBody: document.getElementById('editor-watch').innerHTML,
   };
+  // 不要フィールドを削除
+  delete data.name;
+  delete data.sourceHTML;
+  delete data.watchPages;
+  return data;
 }
 
 // ══════════════════════════════════════════
@@ -1248,12 +1297,17 @@ function autoSelectNearestAirport(lat, lng) {
       try {
         state.airports = JSON.parse(local);
         renderList();
-        if (state.airports.length > 0) selectAirport(state.airports[0].id);
+        if (state.airports.length > 0) {
+          selectAirport(state.airports[0].id);
+          showEditorTab('body');
+        }
         toast('ローカルキャッシュを読み込みました');
       } catch(e) {}
     }
     if (state.token && state.gistId) {
-      fetchGist();
+      fetchGist().then(() => {
+        if (state.selectedId) showEditorTab('body');
+      });
     }
   }
 })();
