@@ -1590,13 +1590,38 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
     toast('先にGistを設定してください', 'warn');
     return;
   }
-  if (!confirm('Gistの全データから watch-selected クラスと不要フィールド（name, sourceHTML, watchPages）を除去してGistに書き戻します。よろしいですか？')) return;
+  if (!confirm('Gistの全データをクリーンアップします（font-family除去・watch-selected除去・不要フィールド削除）。よろしいですか？')) return;
 
   document.getElementById('modal-settings').classList.add('hidden');
   toast('クリーンアップ中...');
 
+  // HTML文字列からfont-familyを除去する強力なサニタイザー
+  function deepCleanHTML(html) {
+    if (!html) return html;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    // 全要素のstyleからfont-familyを除去
+    tmp.querySelectorAll('[style]').forEach(el => {
+      let style = el.getAttribute('style');
+      style = style.replace(/font-family\s*:[^;]+;?/gi, '').trim();
+      style = style.replace(/font-size\s*:\s*[0-9.]+\s*(pt|em|rem)\s*;?/gi, '').trim();
+      if (style) el.setAttribute('style', style);
+      else el.removeAttribute('style');
+    });
+
+    // watch-selected クラスを除去
+    tmp.querySelectorAll('.watch-selected').forEach(el => {
+      el.classList.remove('watch-selected');
+      el.style.paddingLeft = '';
+      el.style.marginLeft = '';
+    });
+    tmp.querySelectorAll('[class=""]').forEach(el => el.removeAttribute('class'));
+
+    return tmp.innerHTML;
+  }
+
   try {
-    // 最新Gistを取得
     const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
     });
@@ -1607,20 +1632,16 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
 
     let airports = JSON.parse(file.content);
 
-    // 各空港のbody・watchBodyをサニタイズ
     airports = airports.map(a => {
       const cleaned = { ...a };
-      // watch-selected クラスを除去
-      if (cleaned.body)      cleaned.body      = sanitizeHTML(cleaned.body);
-      if (cleaned.watchBody) cleaned.watchBody = sanitizeHTML(cleaned.watchBody);
-      // 不要フィールドを削除
+      if (cleaned.body)      cleaned.body      = deepCleanHTML(cleaned.body);
+      if (cleaned.watchBody) cleaned.watchBody = deepCleanHTML(cleaned.watchBody);
       delete cleaned.name;
       delete cleaned.sourceHTML;
       delete cleaned.watchPages;
       return cleaned;
     });
 
-    // Gistに書き戻す
     const content = JSON.stringify(airports, null, 2);
     const patchRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
       method: 'PATCH',
@@ -1633,7 +1654,6 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
     });
     if (!patchRes.ok) throw new Error(patchRes.status);
 
-    // ローカルstateも更新
     state.airports = airports;
     localStorage.setItem('pw3_local', content);
     renderList();
