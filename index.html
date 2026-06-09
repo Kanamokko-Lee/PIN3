@@ -497,6 +497,7 @@
     <div class="modal-hint" style="margin-top:0;">トークンは localStorage に保存されます。共有PCでの使用には注意してください。</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="modal-cancel">CANCEL</button>
+      <button class="btn btn-danger btn-sm" id="btn-cleanup-gist" title="Gistデータのwatch-selectedクラスを除去">🧹 データクリーンアップ</button>
       <button class="btn btn-primary" id="modal-save-settings">SAVE & CONNECT</button>
     </div>
   </div>
@@ -1373,13 +1374,73 @@ document.getElementById('modal-save-settings').addEventListener('click', async (
   state.gistId = document.getElementById('modal-gist-id').value.trim();
   localStorage.setItem('pw3_token', state.token);
   localStorage.setItem('pw3_gist_id', state.gistId);
-  // iOSアプリ上ではKeychainにも保存
   if (window.PW3Bridge) {
     window.PW3Bridge.saveToken(state.token, state.gistId);
   }
   document.getElementById('modal-settings').classList.add('hidden');
   updateGistDot();
   await fetchGist();
+});
+
+// ── Gistデータクリーンアップ ──
+document.getElementById('btn-cleanup-gist').addEventListener('click', async () => {
+  if (!state.token || !state.gistId) {
+    toast('先にGistを設定してください', 'warn');
+    return;
+  }
+  if (!confirm('Gistの全データから watch-selected クラスと不要フィールド（name, sourceHTML, watchPages）を除去してGistに書き戻します。よろしいですか？')) return;
+
+  document.getElementById('modal-settings').classList.add('hidden');
+  toast('クリーンアップ中...');
+
+  try {
+    // 最新Gistを取得
+    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (!res.ok) throw new Error(res.status);
+    const gist = await res.json();
+    const file = gist.files['airports.json'];
+    if (!file) throw new Error('airports.json not found');
+
+    let airports = JSON.parse(file.content);
+
+    // 各空港のbody・watchBodyをサニタイズ
+    airports = airports.map(a => {
+      const cleaned = { ...a };
+      // watch-selected クラスを除去
+      if (cleaned.body)      cleaned.body      = sanitizeHTML(cleaned.body);
+      if (cleaned.watchBody) cleaned.watchBody = sanitizeHTML(cleaned.watchBody);
+      // 不要フィールドを削除
+      delete cleaned.name;
+      delete cleaned.sourceHTML;
+      delete cleaned.watchPages;
+      return cleaned;
+    });
+
+    // Gistに書き戻す
+    const content = JSON.stringify(airports, null, 2);
+    const patchRes = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `token ${state.token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ files: { 'airports.json': { content } } })
+    });
+    if (!patchRes.ok) throw new Error(patchRes.status);
+
+    // ローカルstateも更新
+    state.airports = airports;
+    localStorage.setItem('pw3_local', content);
+    renderList();
+    if (state.selectedId) renderEditor();
+
+    toast('クリーンアップ完了 — ' + airports.length + '件処理しました');
+  } catch(e) {
+    toast('クリーンアップ失敗: ' + e.message, 'err');
+  }
 });
 
 // ══════════════════════════════════════════
