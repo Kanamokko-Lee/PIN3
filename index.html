@@ -420,6 +420,8 @@
                 <button class="tb-btn" data-cmd="removeFormat" data-target="watch">CLR</button>
                 <div class="tb-sep"></div>
                 <button class="tb-btn" id="btn-copy-from-body" title="BODYの選択行 or 全文をWatchに転送">← FROM BODY</button>
+                <div class="tb-sep"></div>
+                <button class="tb-btn btn-primary" id="btn-sync-from-selection" title="記憶した選択行でWatchを更新" style="display:none;">⇄ 選択行同期</button>
               </div>
               <!-- 2行目：色・背景 -->
               <div style="display:flex;align-items:center;gap:4px;width:100%;padding-top:3px;border-top:1px solid var(--c-border2);">
@@ -437,7 +439,7 @@
                 <div class="tb-sep"></div>
                 <div class="tb-color">
                   <span>背景</span>
-                  <input type="color" id="watch-editor-bg" value="#111111" title="Watch背景色">
+                  <input type="color" id="watch-editor-bg" value="#ffffff" title="Watch背景色">
                   <button class="tb-btn" id="apply-editor-bg">▸</button>
                 </div>
               </div>
@@ -447,12 +449,12 @@
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;overflow:hidden;background:var(--c-surface2);padding:16px;">
               <div style="font-size:10px;font-family:var(--font-mono);letter-spacing:0.08em;color:var(--c-text3);text-transform:uppercase;margin-bottom:8px;">WATCH PREVIEW — タップして直接編集</div>
               <!-- Watch外枠 -->
-              <div style="width:198px;min-height:242px;border-radius:40px;border:5px solid #222;background:#000;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.5);position:relative;">
+              <div style="width:198px;min-height:242px;border-radius:40px;border:5px solid #222;background:#fff;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.5);position:relative;">
                 <!-- 直接編集できるdiv（watchBodyをここで編集） -->
                 <div id="watch-direct-editor"
                      contenteditable="true"
                      spellcheck="false"
-                     style="width:100%;min-height:242px;padding:8px;box-sizing:border-box;outline:none;font-family:-apple-system,sans-serif;font-size:13px;color:#eee;background:#000;line-height:1.5;overflow-y:auto;"
+                     style="width:100%;min-height:242px;padding:8px;box-sizing:border-box;outline:none;font-family:-apple-system,sans-serif;font-size:13px;color:#111;background:#fff;line-height:1.5;overflow-y:auto;"
                      data-placeholder="ここに直接入力...">
                 </div>
               </div>
@@ -659,6 +661,11 @@ function renderEditor() {
   showEditorTab(state.activeTab);
   setDirty(false);
   updateWatchPreview();
+
+  // 記憶した選択行があれば同期ボタンを表示
+  const savedIndices = loadSelectedLineIndices(a.id);
+  document.getElementById('btn-sync-from-selection').style.display =
+    savedIndices.length > 0 ? 'inline-block' : 'none';
 }
 
 // ══════════════════════════════════════════
@@ -1070,32 +1077,108 @@ document.getElementById('btn-watch-select-mode').addEventListener('click', () =>
   watchSelectMode ? exitWatchSelectMode() : enterWatchSelectMode();
 });
 
+// ── 選択行インデックスを記憶（空港IDごと）──
+// { airportId: [0, 2, 3, ...] } の形式でlocalStorageに保存
+function saveSelectedLineIndices(airportId, indices) {
+  const key = 'pw3_watch_sel';
+  const all = JSON.parse(localStorage.getItem(key) || '{}');
+  all[airportId] = indices;
+  localStorage.setItem(key, JSON.stringify(all));
+}
+
+function loadSelectedLineIndices(airportId) {
+  const key = 'pw3_watch_sel';
+  const all = JSON.parse(localStorage.getItem(key) || '{}');
+  return all[airportId] || [];
+}
+
+// ── 日付パターンを除去 ──
+// (〜xx/xx) (〜xx/xx) (~xx/xx) などの有効期限
+// 2026/5/1リバイス などの更新日付行
+function removeDatePatterns(html) {
+  let result = html;
+  // (〜x/x) (~x/x) （〜x/x）などの有効期限表記を除去
+  result = result.replace(/[（(][^）)]*[〜~～]\s*\d{1,2}\/\d{1,2}[^）)]*[）)]/g, '');
+  // 行全体が日付系の場合（例：2026/5/1リバイス）→ <br>で区切られた行を除去
+  result = result.replace(/(<br\s*\/?>|\n)\s*\d{4}\/\d{1,2}\/\d{1,2}[^<]*(<br\s*\/?>|\n|$)/gi, '$2');
+  // 先頭行が日付の場合
+  result = result.replace(/^\s*\d{4}\/\d{1,2}\/\d{1,2}[^<]*(<br\s*\/?>|\n)/gi, '');
+  return result;
+}
+
+// ── 完了ボタン：選択行を記憶してWatchに転送 ──
 document.getElementById('btn-watch-select-done').addEventListener('click', () => {
+  const editor = document.getElementById('editor-body');
+  const selected = Array.from(editor.querySelectorAll('[data-selected="true"]'))
+    .filter(el => !el.dataset.empty);
+
+  const selectedIndices = selected.map(el => parseInt(el.dataset.lineIndex));
   const selectedHTML = getSelectedWatchLines();
+
+  // 選択行インデックスを記憶
+  if (selectedIndices.length > 0 && state.selectedId) {
+    saveSelectedLineIndices(state.selectedId, selectedIndices);
+    // 同期ボタンを表示
+    document.getElementById('btn-sync-from-selection').style.display = 'inline-block';
+  }
+
   exitWatchSelectMode();
   showEditorTab('watch');
+
   if (selectedHTML) {
+    const cleaned = removeDatePatterns(selectedHTML);
     const watchEditor = document.getElementById('watch-direct-editor');
-    watchEditor.innerHTML = selectedHTML;
-    document.getElementById('editor-watch').innerHTML = selectedHTML;
+    watchEditor.innerHTML = cleaned;
+    document.getElementById('editor-watch').innerHTML = cleaned;
     markDirty();
-    toast('選択行をWatchに転送しました');
+    toast('選択行をWatchに転送しました（日付除去済）');
   } else {
     toast('行を選択してから完了を押してください', 'warn');
   }
+});
+
+// ── ⇄ 選択行同期ボタン：記憶した行でWatchを更新 ──
+document.getElementById('btn-sync-from-selection').addEventListener('click', () => {
+  if (!state.selectedId) return;
+  const indices = loadSelectedLineIndices(state.selectedId);
+  if (indices.length === 0) {
+    toast('記憶した選択行がありません。先に⌚選択で行を選んでください', 'warn');
+    return;
+  }
+
+  // 現在のbodyHTMLから行を再構築
+  const currentLines = htmlToLineHTMLs(
+    sanitizeHTML(document.getElementById('editor-body').innerHTML)
+  );
+
+  const selectedHTMLParts = indices
+    .filter(i => i < currentLines.length)
+    .map(i => currentLines[i])
+    .filter(html => html && html.trim());
+
+  if (selectedHTMLParts.length === 0) {
+    toast('行インデックスが範囲外です。再度⌚選択で行を選んでください', 'warn');
+    return;
+  }
+
+  const transferHTML = removeDatePatterns(selectedHTMLParts.join('<br>'));
+  const watchEditor = document.getElementById('watch-direct-editor');
+  watchEditor.innerHTML = transferHTML;
+  document.getElementById('editor-watch').innerHTML = transferHTML;
+  markDirty();
+  toast('記憶した選択行でWatchを更新しました');
 });
 
 // FROM BODY ボタン：選択行があれば選択行のみ、なければ全文をコピー
 document.getElementById('btn-copy-from-body').addEventListener('click', () => {
   const selectedHTML = watchSelectMode ? getSelectedWatchLines() : null;
   const bodyHTML = sanitizeHTML(document.getElementById('editor-body').innerHTML);
-
-  const transferHTML = selectedHTML || bodyHTML;
+  const transferHTML = removeDatePatterns(selectedHTML || bodyHTML);
   const watchEditor = document.getElementById('watch-direct-editor');
   watchEditor.innerHTML = transferHTML;
   document.getElementById('editor-watch').innerHTML = transferHTML;
   markDirty();
-  toast(selectedHTML ? '選択行をWatchに転送' : '全文をWatchに転送');
+  toast(selectedHTML ? '選択行をWatchに転送（日付除去済）' : '全文をWatchに転送（日付除去済）');
 });
 
 // ══════════════════════════════════════════
