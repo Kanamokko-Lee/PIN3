@@ -1679,11 +1679,30 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
 
     tmp.querySelectorAll('[style]').forEach(el => {
       let style = el.getAttribute('style');
-      style = style.replace(/font-family\s*:[^;]+;?/gi, '').trim();
+      // font-family を全パターン除去（var()含む）
+      style = style.replace(/font-family\s*:[^;]+;?/gi, '');
+      // font-size を px に統一
       style = normalizeFontSize(style);
       style = style.trim();
       if (style) el.setAttribute('style', style);
       else el.removeAttribute('style');
+    });
+
+    // font-family が style 属性以外に直接書かれている場合も除去
+    tmp.querySelectorAll('[style*="font-family"]').forEach(el => {
+      let style = el.getAttribute('style') || '';
+      style = style.replace(/font-family\s*:[^;]+;?/gi, '').trim();
+      if (style) el.setAttribute('style', style);
+      else el.removeAttribute('style');
+    });
+
+    // styleが空になったspanで中身だけのものはアンラップ
+    tmp.querySelectorAll('span:not([style]):not([class])').forEach(el => {
+      const parent = el.parentNode;
+      if (parent) {
+        while (el.firstChild) parent.insertBefore(el.firstChild, el);
+        parent.removeChild(el);
+      }
     });
 
     tmp.querySelectorAll('.watch-selected').forEach(el => {
