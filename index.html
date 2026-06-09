@@ -963,32 +963,99 @@ document.getElementById('apply-watch-bg').addEventListener('click', () => {
 // WATCH 選択モード
 // ══════════════════════════════════════════
 let watchSelectMode = false;
+let _bodyBeforeSelectMode = ''; // 選択モード前のHTML（復元用）
+
+// HTMLをサニタイズ（watch-selected クラス・選択モード用スタイルを除去）
+function sanitizeHTML(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('.watch-selected').forEach(el => {
+    el.classList.remove('watch-selected');
+    el.style.paddingLeft = '';
+    el.style.marginLeft = '';
+  });
+  // 空クラス属性を除去
+  tmp.querySelectorAll('[class=""]').forEach(el => el.removeAttribute('class'));
+  return tmp.innerHTML;
+}
+
+// BODYのHTMLをbr区切りで行単位のdivに分割
+function splitBodyIntoDivs(editor) {
+  // 現在のHTMLを保存
+  _bodyBeforeSelectMode = editor.innerHTML;
+
+  // 全内容を取得してbr区切りで行に分割
+  const lines = [];
+  const children = Array.from(editor.childNodes);
+
+  let currentGroup = document.createElement('div');
+
+  children.forEach(node => {
+    if (node.nodeName === 'BR') {
+      // brで改行 → 現在のグループを確定して新しいグループへ
+      if (currentGroup.childNodes.length > 0) {
+        lines.push(currentGroup);
+        currentGroup = document.createElement('div');
+      } else {
+        // 空行
+        const emptyDiv = document.createElement('div');
+        emptyDiv.innerHTML = '<br>';
+        lines.push(emptyDiv);
+      }
+    } else if (node.nodeName === 'DIV' || node.nodeName === 'P' ||
+               node.nodeName === 'H1' || node.nodeName === 'H2' || node.nodeName === 'H3') {
+      // ブロック要素はそのまま1行として扱う
+      if (currentGroup.childNodes.length > 0) {
+        lines.push(currentGroup);
+        currentGroup = document.createElement('div');
+      }
+      lines.push(node.cloneNode(true));
+    } else {
+      // インライン要素・テキストは現在のグループに追加
+      currentGroup.appendChild(node.cloneNode(true));
+    }
+  });
+
+  if (currentGroup.childNodes.length > 0) lines.push(currentGroup);
+
+  // エディタをクリアして分割したdivで埋め直す
+  editor.innerHTML = '';
+  lines.forEach(div => {
+    editor.appendChild(div);
+    div.addEventListener('click', toggleWatchSelect);
+  });
+}
+
+// 選択モード用divをbr区切りの元の形に戻す（ただし選択状態はクリア）
+function restoreBodyFromDivs(editor) {
+  // 保存しておいた元のHTMLに戻す（サニタイズして）
+  editor.innerHTML = sanitizeHTML(_bodyBeforeSelectMode);
+  _bodyBeforeSelectMode = '';
+}
 
 function enterWatchSelectMode() {
   watchSelectMode = true;
-  document.getElementById('editor-body').contentEditable = 'false';
+  const editor = document.getElementById('editor-body');
+  editor.contentEditable = 'false';
   document.getElementById('body-section').classList.add('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'flex';
   document.getElementById('btn-watch-select-mode').classList.add('active');
 
-  // 各ブロック要素にクリックリスナーを付ける
-  const editor = document.getElementById('editor-body');
-  Array.from(editor.children).forEach(el => {
-    el.addEventListener('click', toggleWatchSelect);
-  });
+  // br区切りを行単位divに分割
+  splitBodyIntoDivs(editor);
 }
 
 function exitWatchSelectMode() {
   watchSelectMode = false;
-  document.getElementById('editor-body').contentEditable = 'true';
+  const editor = document.getElementById('editor-body');
+
+  // 分割したdivを元のbr構造に戻す
+  restoreBodyFromDivs(editor);
+
+  editor.contentEditable = 'true';
   document.getElementById('body-section').classList.remove('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'none';
   document.getElementById('btn-watch-select-mode').classList.remove('active');
-
-  const editor = document.getElementById('editor-body');
-  Array.from(editor.children).forEach(el => {
-    el.removeEventListener('click', toggleWatchSelect);
-  });
 }
 
 function toggleWatchSelect(e) {
@@ -1000,9 +1067,8 @@ function toggleWatchSelect(e) {
 function getSelectedWatchLines() {
   const editor = document.getElementById('editor-body');
   const selected = editor.querySelectorAll('.watch-selected');
-  if (selected.length === 0) return null; // 選択なし
+  if (selected.length === 0) return null;
   return Array.from(selected).map(el => {
-    // watch-selected クラスと padding-left を除去したクリーンなHTML
     const clone = el.cloneNode(true);
     clone.classList.remove('watch-selected');
     clone.style.paddingLeft = '';
@@ -1016,24 +1082,31 @@ document.getElementById('btn-watch-select-mode').addEventListener('click', () =>
 });
 
 document.getElementById('btn-watch-select-done').addEventListener('click', () => {
+  // 選択行を保存してからexitする
+  const selectedHTML = getSelectedWatchLines();
   exitWatchSelectMode();
-  // WATCHタブに切り替え
   showEditorTab('watch');
-  toast('Watch転送モード終了 — WATCHタブで「← FROM BODY」を押して転送');
+  if (selectedHTML) {
+    document.getElementById('editor-watch').innerHTML = selectedHTML;
+    markDirty();
+    updateWatchPreview();
+    toast('選択行をWatchに転送しました');
+  } else {
+    toast('行を選択してから完了を押してください', 'warn');
+  }
 });
 
 // FROM BODY ボタン：選択行があれば選択行のみ、なければ全文をコピー
 document.getElementById('btn-copy-from-body').addEventListener('click', () => {
-  const selectedHTML = getSelectedWatchLines();
-  const bodyHTML = document.getElementById('editor-body').innerHTML;
+  // 選択モード中なら選択行を取得
+  const selectedHTML = watchSelectMode ? getSelectedWatchLines() : null;
+  const bodyHTML = sanitizeHTML(document.getElementById('editor-body').innerHTML);
 
   let transferHTML;
   if (selectedHTML) {
-    // 選択行のみ転送（書式・色・フォントすべて保持）
     transferHTML = selectedHTML;
-    toast('選択行(' + document.querySelectorAll('.watch-selected').length + '行)をWatchに転送');
+    toast('選択行をWatchに転送');
   } else {
-    // 選択なし → 全文転送
     transferHTML = bodyHTML;
     toast('全文をWatchに転送');
   }
@@ -1059,6 +1132,12 @@ document.getElementById('editor-body').addEventListener('input', markDirty);
 function collectEditorData() {
   const a = getSelected();
   if (!a) return null;
+
+  // 選択モード中なら元のHTMLを使う
+  const rawBody = watchSelectMode
+    ? sanitizeHTML(_bodyBeforeSelectMode)
+    : sanitizeHTML(document.getElementById('editor-body').innerHTML);
+
   const data = {
     ...a,
     id: document.getElementById('f-id').value.trim().toUpperCase() || a.id,
@@ -1069,8 +1148,8 @@ function collectEditorData() {
     terminalGroup: document.getElementById('f-terminalGroup').value.trim(),
     linkedAreaId: document.getElementById('f-linkedAreaId').value.trim(),
     tabColor: getSelectedColor(),
-    body: document.getElementById('editor-body').innerHTML,
-    watchBody: document.getElementById('editor-watch').innerHTML,
+    body: rawBody,
+    watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
   };
   // 不要フィールドを削除
   delete data.name;
