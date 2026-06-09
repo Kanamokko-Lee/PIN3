@@ -934,16 +934,17 @@ document.getElementById('apply-highlight-watch').addEventListener('click', () =>
 });
 
 // ══════════════════════════════════════════
-// WATCH 選択モード（オーバーレイ方式）
+// WATCH 選択モード（シンプル確実版）
 // ──────────────────────────────────────────
-// エディタのHTMLには一切触れない。
-// 透明なオーバーレイをエディタの上に重ねて
-// クリックで行を選択する。
+// 元HTMLを保存 → 選択用divに置換して表示
+// 完了時は元HTMLに戻す
+// 選択行のHTMLは保存した元HTMLから抽出
 // ══════════════════════════════════════════
 let watchSelectMode = false;
 let _bodyBeforeSelectMode = '';
+let _bodyLines = []; // 元HTMLの行配列（テキスト検索用）
 
-// HTMLサニタイズ（watch-selected等の痕跡を除去）
+// HTMLサニタイズ
 function sanitizeHTML(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
@@ -956,246 +957,96 @@ function sanitizeHTML(html) {
   return tmp.innerHTML;
 }
 
-// 選択された行インデックスを管理
-let _selectedLineIndices = new Set();
-let _overlayLines = []; // 各行のRect情報
-
-// エディタの表示行を検出してオーバーレイdivを生成
-function buildOverlay() {
-  const editor = document.getElementById('editor-body');
-  const overlay = document.getElementById('watch-select-overlay');
-  const editorRect = editor.getBoundingClientRect();
-
-  overlay.innerHTML = '';
-  _overlayLines = [];
-  _selectedLineIndices.clear();
-
-  // エディタ内の全テキストノードを取得してy座標で行を分類
-  const range = document.createRange();
-  const lineMap = new Map(); // top座標 → {top, bottom, nodes}
-
-  function processNode(node) {
-    if (node.nodeType === 3 && node.textContent.trim()) {
-      // テキストノードを1文字ずつ走査してy座標を取得
-      range.selectNode(node);
-      const rects = Array.from(range.getClientRects());
-      rects.forEach(rect => {
-        const top = Math.round(rect.top - editorRect.top);
-        const bottom = Math.round(rect.bottom - editorRect.top);
-        if (!lineMap.has(top)) {
-          lineMap.set(top, { top, bottom, left: rect.left - editorRect.left });
-        } else {
-          const existing = lineMap.get(top);
-          existing.bottom = Math.max(existing.bottom, bottom);
-        }
-      });
-    } else if (node.nodeType === 1) {
-      // br要素は特別扱い
-      if (node.tagName === 'BR') {
-        range.selectNode(node);
-        const rects = Array.from(range.getClientRects());
-        if (rects.length > 0) {
-          const rect = rects[0];
-          const top = Math.round(rect.top - editorRect.top);
-          if (!lineMap.has(top)) {
-            lineMap.set(top, { top, bottom: Math.round(rect.bottom - editorRect.top), left: 0, isEmpty: true });
-          }
-        }
-      }
-      node.childNodes.forEach(processNode);
-    }
-  }
-  editor.childNodes.forEach(processNode);
-
-  // y座標でソートして行を確定
-  const sortedTops = Array.from(lineMap.keys()).sort((a, b) => a - b);
-
-  // 近接した行をマージ（3px以内は同じ行）
-  const mergedLines = [];
-  sortedTops.forEach(top => {
-    const line = lineMap.get(top);
-    const last = mergedLines[mergedLines.length - 1];
-    if (last && top - last.top < 4) {
-      last.bottom = Math.max(last.bottom, line.bottom);
-    } else {
-      mergedLines.push({ ...line });
-    }
-  });
-
-  // オーバーレイに行ハイライトdivを配置
-  const editorWidth = editor.offsetWidth;
-  mergedLines.forEach((line, i) => {
-    const div = document.createElement('div');
-    const height = Math.max(line.bottom - line.top, 18);
-    div.style.cssText = `
-      position: absolute;
-      left: 0;
-      top: ${line.top - 2}px;
-      width: ${editorWidth}px;
-      height: ${height + 4}px;
-      cursor: pointer;
-      border-left: 3px solid transparent;
-      border-radius: 2px;
-      transition: background 0.1s;
-      box-sizing: border-box;
-    `;
-    div.dataset.lineIndex = i;
-    div.addEventListener('click', () => toggleOverlayLine(div, i));
-    div.addEventListener('mouseenter', () => {
-      if (!_selectedLineIndices.has(i)) div.style.background = 'rgba(26,58,92,0.08)';
-    });
-    div.addEventListener('mouseleave', () => {
-      if (!_selectedLineIndices.has(i)) div.style.background = 'transparent';
-    });
-    overlay.appendChild(div);
-    _overlayLines.push({ ...line, height, div });
-  });
+// HTMLを行テキストの配列に変換（表示確認用）
+function htmlToLineTexts(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/p>/gi, '\n');
+  const text = tmp.textContent || tmp.innerText || '';
+  return text.split('\n').map(l => l.trim());
 }
 
-function toggleOverlayLine(div, index) {
-  if (_selectedLineIndices.has(index)) {
-    _selectedLineIndices.delete(index);
-    div.style.background = 'transparent';
-    div.style.borderLeftColor = 'transparent';
-  } else {
-    _selectedLineIndices.add(index);
-    div.style.background = 'rgba(26,58,92,0.12)';
-    div.style.borderLeftColor = '#1a3a5c';
-  }
-}
+// HTMLを行HTMLの配列に変換
+function htmlToLineHTMLs(html) {
+  // ブロック要素の閉じタグをすべて改行マーカーに
+  let work = html
+    .replace(/<br\s*\/?>/gi, '⏎LINEBREAK⏎')
+    .replace(/<\/div>/gi, '⏎LINEBREAK⏎')
+    .replace(/<\/p>/gi, '⏎LINEBREAK⏎')
+    .replace(/<\/h[1-6]>/gi, '⏎LINEBREAK⏎')
+    .replace(/<div[^>]*>/gi, '')
+    .replace(/<p[^>]*>/gi, '')
+    .replace(/<h[1-6][^>]*>/gi, '');
 
-// 選択された行のy座標範囲からbodyのHTMLを抽出
-function extractSelectedLinesHTML() {
-  if (_selectedLineIndices.size === 0) return null;
-
-  const editor = document.getElementById('editor-body');
-  const editorRect = editor.getBoundingClientRect();
-  const selectedIndices = Array.from(_selectedLineIndices).sort((a, b) => a - b);
-
-  // 選択された行のy範囲を収集
-  const selectedRanges = selectedIndices.map(i => _overlayLines[i]);
-
-  // エディタのHTMLからノードを走査して
-  // 選択されたy座標範囲に含まれるコンテンツを抽出
-  const resultParts = [];
-
-  function getNodeRects(node) {
-    const range = document.createRange();
-    range.selectNode(node);
-    return Array.from(range.getClientRects());
-  }
-
-  function isInSelectedRange(rects) {
-    return rects.some(rect => {
-      const nodeTop = Math.round(rect.top - editorRect.top);
-      return selectedRanges.some(sr =>
-        nodeTop >= sr.top - 6 && nodeTop <= sr.top + sr.height + 6
-      );
+  return work.split('⏎LINEBREAK⏎')
+    .map(s => s.trim())
+    .filter((s, i, arr) => {
+      // 連続する空行は1つにまとめる
+      if (s === '') return i === 0 || arr[i-1] !== '';
+      return true;
     });
-  }
-
-  function extractFromNode(node, depth) {
-    if (node.nodeType === 3) {
-      // テキストノード
-      const range = document.createRange();
-      range.selectNode(node);
-      const rects = Array.from(range.getClientRects());
-      if (isInSelectedRange(rects)) {
-        return node.textContent;
-      }
-      return '';
-    }
-
-    if (node.nodeType !== 1) return '';
-
-    const tag = node.tagName.toLowerCase();
-
-    if (tag === 'br') {
-      const rects = getNodeRects(node);
-      if (isInSelectedRange(rects)) return '<br>';
-      return '';
-    }
-
-    // ブロック要素・インライン要素
-    const childResults = Array.from(node.childNodes)
-      .map(child => extractFromNode(child, depth + 1))
-      .join('');
-
-    if (!childResults) return '';
-
-    // インライン要素はタグごと保持
-    if (['span','b','strong','i','em','u','a','mark'].includes(tag)) {
-      const style = node.getAttribute('style') ? ` style="${node.getAttribute('style')}"` : '';
-      const cls = node.className ? ` class="${node.className}"` : '';
-      return `<${tag}${style}${cls}>${childResults}</${tag}>`;
-    }
-
-    return childResults;
-  }
-
-  // 行ごとに抽出してbrで連結
-  const lineResults = selectedIndices.map(i => {
-    const line = _overlayLines[i];
-    // この行のy範囲だけを一時的に選択対象にして抽出
-    const tempRanges = [line];
-    const savedRanges = selectedRanges.splice(0);
-    selectedRanges.length = 0;
-    selectedRanges.push(...tempRanges);
-
-    let lineHTML = '';
-    editor.childNodes.forEach(node => {
-      lineHTML += extractFromNode(node, 0);
-    });
-
-    selectedRanges.length = 0;
-    selectedRanges.push(...savedRanges);
-
-    return lineHTML.trim();
-  });
-
-  return lineResults.filter(Boolean).join('<br>');
 }
 
 function enterWatchSelectMode() {
   watchSelectMode = true;
   const editor = document.getElementById('editor-body');
-  editor.contentEditable = 'false';
 
-  // オーバーレイを作成
-  let overlay = document.getElementById('watch-select-overlay');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'watch-select-overlay';
-    overlay.style.cssText = `
-      position: absolute; inset: 0; z-index: 10; pointer-events: none;
-    `;
-    const wrapper = editor.parentElement;
-    wrapper.style.position = 'relative';
-    wrapper.appendChild(overlay);
-  }
-  overlay.style.pointerEvents = 'auto';
-  overlay.style.display = 'block';
+  // 元HTMLを保存
+  _bodyBeforeSelectMode = editor.innerHTML;
+
+  // 行HTMLに分解
+  _bodyLines = htmlToLineHTMLs(_bodyBeforeSelectMode);
+
+  // 選択用divに置き換えて表示
+  editor.contentEditable = 'false';
+  editor.innerHTML = '';
+
+  _bodyLines.forEach((lineHTML, i) => {
+    const div = document.createElement('div');
+    div.dataset.lineIndex = i;
+
+    if (lineHTML === '') {
+      // 空行
+      div.innerHTML = '&nbsp;';
+      div.style.cssText = 'min-height:1em;padding:1px 4px;cursor:pointer;border-left:3px solid transparent;color:#ccc;';
+      div.dataset.empty = 'true';
+    } else {
+      div.innerHTML = lineHTML;
+      div.style.cssText = 'padding:2px 4px;cursor:pointer;border-left:3px solid transparent;border-radius:2px;';
+    }
+
+    div.addEventListener('click', function() {
+      const isSelected = this.dataset.selected === 'true';
+      if (isSelected) {
+        this.dataset.selected = 'false';
+        this.style.background = 'transparent';
+        this.style.borderLeftColor = 'transparent';
+      } else {
+        this.dataset.selected = 'true';
+        this.style.background = 'rgba(26,58,92,0.12)';
+        this.style.borderLeftColor = '#1a3a5c';
+      }
+    });
+
+    editor.appendChild(div);
+  });
 
   document.getElementById('body-section').classList.add('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'flex';
   document.getElementById('btn-watch-select-mode').classList.add('active');
-
-  // 少し待ってからオーバーレイ構築（レンダリング完了後）
-  setTimeout(buildOverlay, 50);
 }
 
 function exitWatchSelectMode() {
   watchSelectMode = false;
   const editor = document.getElementById('editor-body');
-  editor.contentEditable = 'true';
 
-  const overlay = document.getElementById('watch-select-overlay');
-  if (overlay) {
-    overlay.style.display = 'none';
-    overlay.innerHTML = '';
-  }
-  _selectedLineIndices.clear();
-  _overlayLines = [];
+  // 元HTMLに完全に戻す
+  editor.innerHTML = sanitizeHTML(_bodyBeforeSelectMode);
+  editor.contentEditable = 'true';
+  _bodyBeforeSelectMode = '';
+  _bodyLines = [];
 
   document.getElementById('body-section').classList.remove('watch-select-mode');
   document.getElementById('watch-select-hint').style.display = 'none';
@@ -1203,7 +1054,16 @@ function exitWatchSelectMode() {
 }
 
 function getSelectedWatchLines() {
-  return extractSelectedLinesHTML();
+  const editor = document.getElementById('editor-body');
+  const selected = Array.from(editor.querySelectorAll('[data-selected="true"]'))
+    .filter(el => !el.dataset.empty);
+
+  if (selected.length === 0) return null;
+
+  return selected
+    .map(el => _bodyLines[parseInt(el.dataset.lineIndex)])
+    .filter(html => html && html.trim())
+    .join('<br>');
 }
 
 document.getElementById('btn-watch-select-mode').addEventListener('click', () => {
