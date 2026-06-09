@@ -760,6 +760,41 @@ function applyHighlight(editorEl, color) {
   execCmd('backColor', color);
 }
 
+// ペーストHTMLからfont-familyを除去（色・サイズ・ハイライトは保持）
+function cleanPastedHTML(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+
+  // 全要素のstyleからfont-familyだけ除去
+  tmp.querySelectorAll('[style]').forEach(el => {
+    const style = el.getAttribute('style');
+    const cleaned = style
+      .replace(/font-family\s*:[^;]+;?/gi, '')
+      .replace(/font-size\s*:\s*[0-9.]+\s*(pt|em|rem)\s*;?/gi, '') // ptやremは除去（pxは保持）
+      .trim();
+    if (cleaned) {
+      el.setAttribute('style', cleaned);
+    } else {
+      el.removeAttribute('style');
+    }
+  });
+
+  // <div>と<p>を<br>に変換（改行の統一）
+  tmp.querySelectorAll('div, p').forEach(el => {
+    const br = document.createElement('br');
+    el.parentNode.insertBefore(br, el);
+    while (el.firstChild) {
+      el.parentNode.insertBefore(el.firstChild, el);
+    }
+    el.parentNode.removeChild(el);
+  });
+
+  // 不要なclass属性を除去
+  tmp.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
+
+  return tmp.innerHTML;
+}
+
 function setupToolbar(toolbarId, editorId) {
   const toolbar = document.getElementById(toolbarId);
   const editor = document.getElementById(editorId);
@@ -820,6 +855,37 @@ function setupToolbar(toolbarId, editorId) {
   editor.addEventListener('keyup', () => updateToolbarState(toolbar, editor));
   editor.addEventListener('mouseup', () => updateToolbarState(toolbar, editor));
   editor.addEventListener('input', () => { markDirty(); if (editorId === 'editor-watch') updateWatchPreview(); });
+
+  // ── Enterキーを<br>に統一 ──
+  editor.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      execCmd('insertHTML', '<br>');
+    }
+  });
+
+  // ── ペースト時にfont-familyを除去してクリーンに ──
+  editor.addEventListener('paste', e => {
+    e.preventDefault();
+    // プレーンテキストとHTMLの両方を取得
+    const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
+
+    if (html) {
+      // HTMLペーストの場合：font-familyだけ除去して他のstyleは保持
+      const cleaned = cleanPastedHTML(html);
+      execCmd('insertHTML', cleaned);
+    } else {
+      // テキストペーストの場合：改行を<br>に変換
+      const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+      execCmd('insertHTML', escaped);
+    }
+    markDirty();
+  });
 }
 
 function updateToolbarState(toolbar, editor) {
