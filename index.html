@@ -374,6 +374,7 @@
                   <span>塗り</span>
                   <input type="color" id="highlight-picker-body" value="#fff176" title="ハイライト色">
                   <button class="tb-btn" id="apply-highlight-body">▸</button>
+                  <button class="tb-btn" id="clear-highlight-body" title="ハイライトを消す">✕</button>
                 </div>
               </div>
             </div>
@@ -435,6 +436,7 @@
                   <span>塗り</span>
                   <input type="color" id="highlight-picker-watch" value="#ffff00" title="ハイライト色">
                   <button class="tb-btn" id="apply-highlight-watch">▸</button>
+                  <button class="tb-btn" id="clear-highlight-watch" title="ハイライトを消す">✕</button>
                 </div>
                 <div class="tb-sep"></div>
                 <div class="tb-color">
@@ -981,7 +983,38 @@ document.getElementById('apply-editor-bg').addEventListener('click', () => {
   markDirty();
 });
 
-document.getElementById('apply-color-watch').addEventListener('click', () => {
+// ハイライトを消去（background-colorのみ除去）
+function clearHighlight(editorEl) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  // backColorをinheritに設定することで背景色を除去
+  execCmd('backColor', 'rgba(0,0,0,0)');
+  // さらにspanのbackground-colorを直接除去
+  const range = sel.getRangeAt(0);
+  const fragment = range.cloneContents();
+  const tmp = document.createElement('div');
+  tmp.appendChild(fragment);
+  tmp.querySelectorAll('[style]').forEach(el => {
+    let style = el.getAttribute('style');
+    style = style.replace(/background-color\s*:[^;]+;?/gi, '').trim();
+    if (style) el.setAttribute('style', style);
+    else el.removeAttribute('style');
+  });
+  range.deleteContents();
+  range.insertNode(tmp.firstChild || document.createTextNode(''));
+  markDirty();
+}
+
+document.getElementById('clear-highlight-body').addEventListener('click', () => {
+  clearHighlight(document.getElementById('editor-body'));
+});
+document.getElementById('clear-highlight-watch').addEventListener('click', () => {
+  const editor = document.getElementById('watch-direct-editor');
+  clearHighlight(editor);
+  document.getElementById('editor-watch').innerHTML = editor.innerHTML;
+  markDirty();
+});
   const editor = document.getElementById('watch-direct-editor');
   editor.focus();
   execCmd('foreColor', document.getElementById('color-picker-watch').value);
