@@ -764,23 +764,30 @@ function applyHighlight(editorEl, color) {
   execCmd('backColor', color);
 }
 
-// ペーストHTMLからfont-familyを除去（色・サイズ・ハイライトは保持）
+// font-sizeの単位をpxに統一する
+function normalizeFontSize(style) {
+  return style.replace(/font-size\s*:\s*([0-9.]+)\s*(pt|em|rem)\s*;?/gi, (match, num, unit) => {
+    const n = parseFloat(num);
+    let px;
+    if (unit === 'pt')  px = Math.round(n * 1.333);  // 1pt = 1.333px
+    if (unit === 'em')  px = Math.round(n * 16);      // 1em = 16px（基準）
+    if (unit === 'rem') px = Math.round(n * 16);      // 1rem = 16px（基準）
+    return `font-size: ${px}px;`;
+  });
+}
+
+// ペーストHTMLからfont-familyを除去、font-sizeをpxに統一
 function cleanPastedHTML(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
 
-  // 全要素のstyleからfont-familyだけ除去
   tmp.querySelectorAll('[style]').forEach(el => {
-    const style = el.getAttribute('style');
-    const cleaned = style
-      .replace(/font-family\s*:[^;]+;?/gi, '')
-      .replace(/font-size\s*:\s*[0-9.]+\s*(pt|em|rem)\s*;?/gi, '') // ptやremは除去（pxは保持）
-      .trim();
-    if (cleaned) {
-      el.setAttribute('style', cleaned);
-    } else {
-      el.removeAttribute('style');
-    }
+    let style = el.getAttribute('style');
+    style = style.replace(/font-family\s*:[^;]+;?/gi, '');
+    style = normalizeFontSize(style);
+    style = style.trim();
+    if (style) el.setAttribute('style', style);
+    else el.removeAttribute('style');
   });
 
   // <div>と<p>を<br>に変換（改行の統一）
@@ -793,7 +800,6 @@ function cleanPastedHTML(html) {
     el.parentNode.removeChild(el);
   });
 
-  // 不要なclass属性を除去
   tmp.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
 
   return tmp.innerHTML;
@@ -1671,16 +1677,15 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
 
-    // 全要素のstyleからfont-familyを除去
     tmp.querySelectorAll('[style]').forEach(el => {
       let style = el.getAttribute('style');
       style = style.replace(/font-family\s*:[^;]+;?/gi, '').trim();
-      style = style.replace(/font-size\s*:\s*[0-9.]+\s*(pt|em|rem)\s*;?/gi, '').trim();
+      style = normalizeFontSize(style);
+      style = style.trim();
       if (style) el.setAttribute('style', style);
       else el.removeAttribute('style');
     });
 
-    // watch-selected クラスを除去
     tmp.querySelectorAll('.watch-selected').forEach(el => {
       el.classList.remove('watch-selected');
       el.style.paddingLeft = '';
