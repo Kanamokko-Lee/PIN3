@@ -736,22 +736,41 @@ function execCmd(cmd, value = null) {
   document.execCommand(cmd, false, value);
 }
 
-// フォントサイズ：選択範囲を <span style="font-size:Xpx"> でラップ
+// フォントサイズ：選択範囲内の既存font-sizeを除去してから新サイズで挟む
 function applyFontSize(editorEl, px) {
   editorEl.focus();
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
   const range = sel.getRangeAt(0);
+
+  // 選択範囲のHTMLを取得
+  const frag = range.extractContents();
+
+  // fragment内の全spanからfont-sizeを除去
+  const tmp = document.createElement('div');
+  tmp.appendChild(frag);
+  tmp.querySelectorAll('[style]').forEach(el => {
+    let style = el.getAttribute('style');
+    style = style.replace(/font-size\s*:[^;]+;?/gi, '').trim();
+    if (style) el.setAttribute('style', style);
+    else el.removeAttribute('style');
+  });
+  // styleが空になったspanをアンラップ
+  tmp.querySelectorAll('span:not([style]):not([class])').forEach(el => {
+    const parent = el.parentNode;
+    if (parent) {
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    }
+  });
+
+  // 新しいfont-sizeのspanで包む
   const span = document.createElement('span');
   span.style.fontSize = px + 'px';
-  try {
-    range.surroundContents(span);
-  } catch(e) {
-    // 複数ノードにまたがる場合は extractContents → wrap
-    const frag = range.extractContents();
-    span.appendChild(frag);
-    range.insertNode(span);
-  }
+  while (tmp.firstChild) span.appendChild(tmp.firstChild);
+  range.insertNode(span);
+
+  // 選択範囲を新しいspanに設定
   sel.removeAllRanges();
   const newRange = document.createRange();
   newRange.selectNodeContents(span);
@@ -1715,36 +1734,51 @@ document.getElementById('btn-cleanup-gist').addEventListener('click', async () =
       });
     }
 
-    // 4. ネストした同じfont-sizeのspanをアンラップ（外側を除去）
+    // 4. ネストしたfont-size：外側を残して内側のfont-sizeを除去
+    // 外側にfont-sizeがある場合、その子孫のfont-sizeを全て除去
+    tmp.querySelectorAll('span[style*="font-size"]').forEach(outer => {
+      const outerStyle = outer.getAttribute('style') || '';
+      if (!/font-size/.test(outerStyle)) return;
+      // 子孫のspanからfont-sizeを除去
+      outer.querySelectorAll('[style]').forEach(inner => {
+        let style = inner.getAttribute('style');
+        style = style.replace(/font-size\s*:[^;]+;?/gi, '').trim();
+        if (style) inner.setAttribute('style', style);
+        else inner.removeAttribute('style');
+      });
+    });
+
+    // 5. styleが空になったspanをアンラップ（再度）
     changed = true;
     while (changed) {
       changed = false;
-      tmp.querySelectorAll('span[style]').forEach(outer => {
-        const outerSize = (outer.getAttribute('style') || '').match(/font-size\s*:\s*([0-9.]+px)/i)?.[1];
-        if (!outerSize) return;
-        // 直接の子spanが1つだけで同じfont-sizeなら外側をアンラップ
-        const children = Array.from(outer.childNodes).filter(n => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()));
-        if (children.length === 1 && children[0].tagName === 'SPAN') {
-          const inner = children[0];
-          const innerSize = (inner.getAttribute('style') || '').match(/font-size\s*:\s*([0-9.]+px)/i)?.[1];
-          if (innerSize === outerSize) {
-            // 外側のstyleから font-size を除去してアンラップ
-            let outerStyle = outer.getAttribute('style').replace(/font-size\s*:[^;]+;?/gi, '').trim();
-            if (outerStyle) {
-              // 外側に他のstyleが残っている場合は内側にマージ
-              let innerStyle = inner.getAttribute('style') || '';
-              inner.setAttribute('style', outerStyle + '; ' + innerStyle);
-            }
-            const parent = outer.parentNode;
-            if (parent) {
-              parent.insertBefore(inner, outer);
-              parent.removeChild(outer);
-              changed = true;
-            }
-          }
+      tmp.querySelectorAll('span:not([style]):not([class])').forEach(el => {
+        const parent = el.parentNode;
+        if (parent) {
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          parent.removeChild(el);
+          changed = true;
         }
       });
     }
+
+    // 6. 空のbタグ・fontタグをアンラップ
+    ['b', 'strong', 'i', 'em', 'u', 'font'].forEach(tag => {
+      tmp.querySelectorAll(tag).forEach(el => {
+        if (el.innerHTML.trim() === '') {
+          el.parentNode?.removeChild(el);
+        } else if (tag === 'font') {
+          // fontタグをspanに変換
+          const span = document.createElement('span');
+          const color = el.getAttribute('color');
+          let style = el.getAttribute('style') || '';
+          if (color) style = `color: ${color}; ` + style;
+          if (style.trim()) span.setAttribute('style', style.trim());
+          while (el.firstChild) span.appendChild(el.firstChild);
+          el.parentNode?.replaceChild(span, el);
+        }
+      });
+    });
 
     // 5. watch-selected クラスを除去
     tmp.querySelectorAll('.watch-selected').forEach(el => {
