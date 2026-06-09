@@ -1293,7 +1293,7 @@ function collectEditorData() {
     tabColor: getSelectedColor(),
     body: rawBody,
     watchBody: sanitizeHTML(document.getElementById('editor-watch').innerHTML),
-    updatedAt: new Date().toISOString(), // 更新日時を記録
+    updatedAt: new Date().toISOString(),
   };
   delete data.name;
   delete data.sourceHTML;
@@ -1503,7 +1503,7 @@ async function syncToGist() {
 }
 
 document.getElementById('btn-sync-all').addEventListener('click', async () => {
-  // 常にSAVE LOCALを実行してから同期（dirtyフラグに関わらず）
+  // 現在の編集内容をローカルに保存してから同期
   saveLocal();
   await syncToGist();
 });
