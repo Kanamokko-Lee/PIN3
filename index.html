@@ -736,114 +736,246 @@ function execCmd(cmd, value = null) {
   document.execCommand(cmd, false, value);
 }
 
-// フォントサイズ：選択範囲内の既存font-sizeを除去してから新サイズで挟む
-function applyFontSize(editorEl, px) {
-  editorEl.focus();
+// ══════════════════════════════════════════
+// STYLE ENGINE
+// spanを増殖させずに既存spanのstyleを直接書き換える
+// ══════════════════════════════════════════
+
+// 選択範囲内の全テキストノードを取得
+function getSelectedTextNodes(range) {
+  const root = range.commonAncestorContainer;
+  const rootEl = root.nodeType === 3 ? root.parentNode : root;
+  const nodes = [];
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, null);
+  while (walker.nextNode()) {
+    if (range.intersectsNode(walker.currentNode)) nodes.push(walker.currentNode);
+  }
+  return nodes;
+}
+
+// テキストノードを包んでいる最も近いspanを返す（editor外には出ない）
+function getEnclosingSpan(node, editor) {
+  let el = node.nodeType === 3 ? node.parentNode : node;
+  while (el && el !== editor) {
+    if (el.tagName === 'SPAN') return el;
+    el = el.parentNode;
+  }
+  return null;
+}
+
+// styleオブジェクト → style文字列
+function styleObjToString(obj) {
+  return Object.entries(obj).filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join('; ');
+}
+
+// style文字列 → styleオブジェクト
+function styleStringToObj(str) {
+  const obj = {};
+  if (!str) return obj;
+  str.split(';').forEach(part => {
+    const idx = part.indexOf(':');
+    if (idx === -1) return;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key && val) obj[key] = val;
+  });
+  return obj;
+}
+
+// spanのstyleを更新（空になったらアンラップ）
+function updateSpanStyle(span, styleObj) {
+  const str = styleObjToString(styleObj);
+  if (str) {
+    span.setAttribute('style', str);
+  } else {
+    const parent = span.parentNode;
+    if (!parent) return;
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    parent.removeChild(span);
+  }
+}
+
+// 隣接する同一styleのspanをマージ
+function mergeAdjacentSpans(container) {
+  Array.from(container.querySelectorAll('span')).forEach(span => {
+    if (!span.parentNode) return;
+    const next = span.nextSibling;
+    if (next && next.tagName === 'SPAN') {
+      const s1 = normalizeStyleStr(span.getAttribute('style') || '');
+      const s2 = normalizeStyleStr(next.getAttribute('style') || '');
+      if (s1 === s2) {
+        while (next.firstChild) span.appendChild(next.firstChild);
+        next.parentNode.removeChild(next);
+      }
+    }
+  });
+}
+
+function normalizeStyleStr(str) {
+  return str.split(';').map(s => s.trim()).filter(s => s).sort().join('; ');
+}
+
+// 選択範囲内の全テキストノードにstyleプロパティを適用
+function applyStyleToSelection(editor, prop, value) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
   const range = sel.getRangeAt(0);
+  const textNodes = getSelectedTextNodes(range);
 
-  // 選択範囲のHTMLを取得
-  const frag = range.extractContents();
+  textNodes.forEach(node => {
+    // 部分選択の分割
+    let targetNode = node;
+    if (node === range.endContainer && range.endOffset < node.length) {
+      node.splitText(range.endOffset);
+    }
+    if (node === range.startContainer && range.startOffset > 0) {
+      targetNode = node.splitText(range.startOffset);
+    }
 
-  // fragment内の全spanからfont-sizeを除去
-  const tmp = document.createElement('div');
-  tmp.appendChild(frag);
-  tmp.querySelectorAll('[style]').forEach(el => {
-    let style = el.getAttribute('style');
-    style = style.replace(/font-size\s*:[^;]+;?/gi, '').trim();
-    if (style) el.setAttribute('style', style);
-    else el.removeAttribute('style');
-  });
-  // styleが空になったspanをアンラップ
-  tmp.querySelectorAll('span:not([style]):not([class])').forEach(el => {
-    const parent = el.parentNode;
-    if (parent) {
-      while (el.firstChild) parent.insertBefore(el.firstChild, el);
-      parent.removeChild(el);
+    const span = getEnclosingSpan(targetNode, editor);
+    if (span) {
+      const styleObj = styleStringToObj(span.getAttribute('style') || '');
+      if (value === null || value === '') {
+        delete styleObj[prop];
+      } else {
+        styleObj[prop] = value;
+      }
+      updateSpanStyle(span, styleObj);
+    } else {
+      if (value !== null && value !== '') {
+        const span = document.createElement('span');
+        span.style.setProperty(prop, value);
+        targetNode.parentNode.insertBefore(span, targetNode);
+        span.appendChild(targetNode);
+      }
     }
   });
 
-  // 新しいfont-sizeのspanで包む
-  const span = document.createElement('span');
-  span.style.fontSize = px + 'px';
-  while (tmp.firstChild) span.appendChild(tmp.firstChild);
-  range.insertNode(span);
-
-  // 選択範囲を新しいspanに設定
-  sel.removeAllRanges();
-  const newRange = document.createRange();
-  newRange.selectNodeContents(span);
-  sel.addRange(newRange);
+  mergeAdjacentSpans(editor);
+  markDirty();
 }
 
-// ハイライト：backColor を使う（選択範囲に背景色）
+// ── フォントサイズ ──
+function applyFontSize(editorEl, px) {
+  editorEl.focus();
+  applyStyleToSelection(editorEl, 'font-size', px + 'px');
+}
+
+// ── 太字トグル ──
+function applyBold(editorEl) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const textNodes = getSelectedTextNodes(sel.getRangeAt(0));
+  const allBold = textNodes.length > 0 && textNodes.every(n => {
+    const span = getEnclosingSpan(n, editorEl);
+    return styleStringToObj(span?.getAttribute('style') || '')['font-weight'] === 'bold';
+  });
+  applyStyleToSelection(editorEl, 'font-weight', allBold ? null : 'bold');
+}
+
+// ── 斜体トグル ──
+function applyItalic(editorEl) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const textNodes = getSelectedTextNodes(sel.getRangeAt(0));
+  const allItalic = textNodes.length > 0 && textNodes.every(n => {
+    const span = getEnclosingSpan(n, editorEl);
+    return styleStringToObj(span?.getAttribute('style') || '')['font-style'] === 'italic';
+  });
+  applyStyleToSelection(editorEl, 'font-style', allItalic ? null : 'italic');
+}
+
+// ── 下線トグル ──
+function applyUnderline(editorEl) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const textNodes = getSelectedTextNodes(sel.getRangeAt(0));
+  const allUnderline = textNodes.length > 0 && textNodes.every(n => {
+    const span = getEnclosingSpan(n, editorEl);
+    return styleStringToObj(span?.getAttribute('style') || '')['text-decoration'] === 'underline';
+  });
+  applyStyleToSelection(editorEl, 'text-decoration', allUnderline ? null : 'underline');
+}
+
+// ── 文字色 ──
+function applyForeColor(editorEl, color) {
+  editorEl.focus();
+  applyStyleToSelection(editorEl, 'color', color);
+}
+
+// ── ハイライト（背景色）──
 function applyHighlight(editorEl, color) {
   editorEl.focus();
-  execCmd('backColor', color);
+  applyStyleToSelection(editorEl, 'background-color', color);
 }
 
-// font-sizeの単位をpxに統一する
-function normalizeFontSize(style) {
-  return style.replace(/font-size\s*:\s*([0-9.]+)\s*(pt|em|rem)\s*;?/gi, (match, num, unit) => {
-    const n = parseFloat(num);
-    let px;
-    if (unit === 'pt')  px = Math.round(n * 1.333);  // 1pt = 1.333px
-    if (unit === 'em')  px = Math.round(n * 16);      // 1em = 16px（基準）
-    if (unit === 'rem') px = Math.round(n * 16);      // 1rem = 16px（基準）
-    return `font-size: ${px}px;`;
-  });
+// ── ハイライト消去 ──
+function clearHighlight(editorEl) {
+  editorEl.focus();
+  applyStyleToSelection(editorEl, 'background-color', null);
 }
 
-// ペーストHTMLからfont-familyを除去、font-sizeをpxに統一
-function cleanPastedHTML(html) {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-
-  tmp.querySelectorAll('[style]').forEach(el => {
-    let style = el.getAttribute('style');
-    style = style.replace(/font-family\s*:[^;]+;?/gi, '');
-    style = normalizeFontSize(style);
-    style = style.trim();
-    if (style) el.setAttribute('style', style);
-    else el.removeAttribute('style');
+// ── 書式クリア ──
+function removeFormat(editorEl) {
+  editorEl.focus();
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const textNodes = getSelectedTextNodes(sel.getRangeAt(0));
+  textNodes.forEach(node => {
+    const span = getEnclosingSpan(node, editorEl);
+    if (span) updateSpanStyle(span, {});
   });
+  mergeAdjacentSpans(editorEl);
+  markDirty();
+}
 
-  // <div>と<p>を<br>に変換（改行の統一）
-  tmp.querySelectorAll('div, p').forEach(el => {
-    const br = document.createElement('br');
-    el.parentNode.insertBefore(br, el);
-    while (el.firstChild) {
-      el.parentNode.insertBefore(el.firstChild, el);
+// ── ツールバー状態更新 ──
+function updateToolbarState(toolbar, editor) {
+  const sel = window.getSelection();
+  const checks = { bold: false, italic: false, underline: false };
+  if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+    const textNodes = getSelectedTextNodes(sel.getRangeAt(0));
+    if (textNodes.length > 0) {
+      checks.bold      = textNodes.every(n => styleStringToObj(getEnclosingSpan(n, editor)?.getAttribute('style') || '')['font-weight'] === 'bold');
+      checks.italic    = textNodes.every(n => styleStringToObj(getEnclosingSpan(n, editor)?.getAttribute('style') || '')['font-style'] === 'italic');
+      checks.underline = textNodes.every(n => styleStringToObj(getEnclosingSpan(n, editor)?.getAttribute('style') || '')['text-decoration'] === 'underline');
     }
-    el.parentNode.removeChild(el);
+  }
+  ['bold','italic','underline'].forEach(cmd => {
+    const btn = toolbar.querySelector(`[data-cmd="${cmd}"]`);
+    if (btn) btn.classList.toggle('active', checks[cmd]);
   });
-
-  tmp.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
-
-  return tmp.innerHTML;
 }
 
+// ══════════════════════════════════════════
+// TOOLBAR SETUP
+// ══════════════════════════════════════════
 function setupToolbar(toolbarId, editorId) {
   const toolbar = document.getElementById(toolbarId);
-  const editor = document.getElementById(editorId);
+  const editor  = document.getElementById(editorId);
 
-  // ボタン
+  // 書式ボタン
   toolbar.querySelectorAll('.tb-btn[data-cmd]').forEach(btn => {
     btn.addEventListener('mousedown', e => {
       e.preventDefault();
       editor.focus();
       const cmd = btn.dataset.cmd;
-      if (cmd === 'insertHR') execCmd('insertHTML', '<hr>');
-      else if (cmd === 'insertTable') {
-        execCmd('insertHTML', '<table><thead><tr><th>項目</th><th>内容</th></tr></thead><tbody><tr><td></td><td></td></tr></tbody></table><p></p>');
-      }
-      else execCmd(cmd);
+      if      (cmd === 'bold')           applyBold(editor);
+      else if (cmd === 'italic')         applyItalic(editor);
+      else if (cmd === 'underline')      applyUnderline(editor);
+      else if (cmd === 'removeFormat')   removeFormat(editor);
+      else if (cmd === 'insertHR')       document.execCommand('insertHTML', false, '<hr>');
+      else if (cmd === 'insertTable')    document.execCommand('insertHTML', false, '<table><thead><tr><th>項目</th><th>内容</th></tr></thead><tbody><tr><td></td><td></td></tr></tbody></table><br>');
+      else if (cmd === 'insertUnorderedList') document.execCommand('insertUnorderedList');
+      else if (cmd === 'insertOrderedList')   document.execCommand('insertOrderedList');
       updateToolbarState(toolbar, editor);
     });
   });
 
-  // フォントサイズ select
+  // フォントサイズ
   const fsSelect = toolbar.querySelector('.tb-select[id^="fontsize"]');
   if (fsSelect) {
     fsSelect.addEventListener('change', e => {
@@ -851,42 +983,32 @@ function setupToolbar(toolbarId, editorId) {
       if (px) applyFontSize(editor, px);
       e.target.value = '';
       markDirty();
-      if (editorId === 'editor-watch') updateWatchPreview();
+      if (editorId === 'watch-direct-editor') updateWatchPreview();
     });
   }
 
-  // フォントファミリー select
+  // フォントファミリー
   const ffSelect = toolbar.querySelector('.tb-select[id^="fontfamily"]');
   if (ffSelect) {
     ffSelect.addEventListener('change', e => {
       const family = e.target.value;
       if (!family) return;
-      editor.focus();
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-        const range = sel.getRangeAt(0);
-        const span = document.createElement('span');
-        span.style.fontFamily = family;
-        try {
-          range.surroundContents(span);
-        } catch(err) {
-          const frag = range.extractContents();
-          span.appendChild(frag);
-          range.insertNode(span);
-        }
-      }
+      applyStyleToSelection(editor, 'font-family', family);
       e.target.value = '';
       markDirty();
-      if (editorId === 'editor-watch') updateWatchPreview();
+      if (editorId === 'watch-direct-editor') updateWatchPreview();
     });
   }
 
-  editor.addEventListener('keyup', () => updateToolbarState(toolbar, editor));
+  editor.addEventListener('keyup',  () => updateToolbarState(toolbar, editor));
   editor.addEventListener('mouseup', () => updateToolbarState(toolbar, editor));
-  editor.addEventListener('input', () => { markDirty(); if (editorId === 'editor-watch') updateWatchPreview(); });
+  editor.addEventListener('input',   () => {
+    markDirty();
+    if (editorId === 'watch-direct-editor') updateWatchPreview();
+  });
 
-  // ── Enterキーを<br>に統一（Safari対応）──
-  editor.addEventListener('keypress', e => {
+  // Enter → <br>
+  editor.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -894,76 +1016,49 @@ function setupToolbar(toolbarId, editorId) {
       if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
       range.deleteContents();
-
       const br = document.createElement('br');
       range.insertNode(br);
-
       const next = br.nextSibling;
       if (!next || (next.nodeType === 3 && next.textContent === '')) {
-        const extraBr = document.createElement('br');
-        br.parentNode.insertBefore(extraBr, next || null);
+        br.parentNode.insertBefore(document.createElement('br'), next || null);
       }
-
       const newRange = document.createRange();
       newRange.setStartAfter(br);
       newRange.collapse(true);
       sel.removeAllRanges();
       sel.addRange(newRange);
-
       markDirty();
     }
   });
 
-  editor.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  });
-
-  // ── ペースト時にfont-familyを除去してクリーンに ──
+  // ペースト：font-family除去
   editor.addEventListener('paste', e => {
     e.preventDefault();
-    // プレーンテキストとHTMLの両方を取得
-    const html = e.clipboardData.getData('text/html');
-    const text = e.clipboardData.getData('text/plain');
-
+    const html  = e.clipboardData.getData('text/html');
+    const text  = e.clipboardData.getData('text/plain');
     if (html) {
-      // HTMLペーストの場合：font-familyだけ除去して他のstyleは保持
-      const cleaned = cleanPastedHTML(html);
-      execCmd('insertHTML', cleaned);
+      document.execCommand('insertHTML', false, cleanPastedHTML(html));
     } else {
-      // テキストペーストの場合：改行を<br>に変換
       const escaped = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/\n/g, '<br>');
-      execCmd('insertHTML', escaped);
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/\n/g,'<br>');
+      document.execCommand('insertHTML', false, escaped);
     }
     markDirty();
   });
 }
 
-function updateToolbarState(toolbar, editor) {
-  ['bold','italic','underline'].forEach(cmd => {
-    const btn = toolbar.querySelector(`[data-cmd="${cmd}"]`);
-    if (btn) btn.classList.toggle('active', document.queryCommandState(cmd));
-  });
-}
-
-// 文字色・ハイライト
+// 色・ハイライトボタン
 document.getElementById('apply-color-body').addEventListener('click', () => {
-  const editor = document.getElementById('editor-body');
-  editor.focus();
-  execCmd('foreColor', document.getElementById('color-picker-body').value);
-  markDirty();
+  applyForeColor(document.getElementById('editor-body'), document.getElementById('color-picker-body').value);
 });
 document.getElementById('apply-highlight-body').addEventListener('click', () => {
-  const editor = document.getElementById('editor-body');
-  applyHighlight(editor, document.getElementById('highlight-picker-body').value);
-  markDirty();
+  applyHighlight(document.getElementById('editor-body'), document.getElementById('highlight-picker-body').value);
 });
+document.getElementById('clear-highlight-body').addEventListener('click', () => {
+  clearHighlight(document.getElementById('editor-body'));
+});
+
 setupToolbar('toolbar-body', 'editor-body');
 setupToolbar('toolbar-watch', 'watch-direct-editor');
 
@@ -1036,53 +1131,24 @@ document.getElementById('apply-editor-bg').addEventListener('click', () => {
   markDirty();
 });
 
-// ハイライトを消去（background-colorのみ除去）
-function clearHighlight(editorEl) {
-  editorEl.focus();
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
-  // backColorをinheritに設定することで背景色を除去
-  execCmd('backColor', 'rgba(0,0,0,0)');
-  // さらにspanのbackground-colorを直接除去
-  const range = sel.getRangeAt(0);
-  const fragment = range.cloneContents();
-  const tmp = document.createElement('div');
-  tmp.appendChild(fragment);
-  tmp.querySelectorAll('[style]').forEach(el => {
-    let style = el.getAttribute('style');
-    style = style.replace(/background-color\s*:[^;]+;?/gi, '').trim();
-    if (style) el.setAttribute('style', style);
-    else el.removeAttribute('style');
-  });
-  range.deleteContents();
-  range.insertNode(tmp.firstChild || document.createTextNode(''));
-  markDirty();
-}
 
-document.getElementById('clear-highlight-body').addEventListener('click', () => {
-  clearHighlight(document.getElementById('editor-body'));
+// Watch色・ハイライトボタン
+document.getElementById('apply-color-watch').addEventListener('click', () => {
+  const editor = document.getElementById('watch-direct-editor');
+  applyForeColor(editor, document.getElementById('color-picker-watch').value);
+  document.getElementById('editor-watch').innerHTML = editor.innerHTML;
+});
+document.getElementById('apply-highlight-watch').addEventListener('click', () => {
+  const editor = document.getElementById('watch-direct-editor');
+  applyHighlight(editor, document.getElementById('highlight-picker-watch').value);
+  document.getElementById('editor-watch').innerHTML = editor.innerHTML;
 });
 document.getElementById('clear-highlight-watch').addEventListener('click', () => {
   const editor = document.getElementById('watch-direct-editor');
   clearHighlight(editor);
   document.getElementById('editor-watch').innerHTML = editor.innerHTML;
-  markDirty();
 });
 
-document.getElementById('apply-color-watch').addEventListener('click', () => {
-  const editor = document.getElementById('watch-direct-editor');
-  editor.focus();
-  execCmd('foreColor', document.getElementById('color-picker-watch').value);
-  document.getElementById('editor-watch').innerHTML = editor.innerHTML;
-  markDirty();
-});
-
-document.getElementById('apply-highlight-watch').addEventListener('click', () => {
-  const editor = document.getElementById('watch-direct-editor');
-  applyHighlight(editor, document.getElementById('highlight-picker-watch').value);
-  document.getElementById('editor-watch').innerHTML = editor.innerHTML;
-  markDirty();
-});
 
 // ══════════════════════════════════════════
 // WATCH 選択モード（シンプル確実版）
@@ -1477,43 +1543,17 @@ document.addEventListener('keydown', e => {
   const active = document.activeElement;
   const isEditor = active.classList.contains('rich-editor') || active.id === 'watch-direct-editor';
   if (isEditor) {
-    if (e.key === 'b') { e.preventDefault(); execCmd('bold'); }
-    if (e.key === 'i') { e.preventDefault(); execCmd('italic'); }
-    if (e.key === 'u') { e.preventDefault(); execCmd('underline'); }
+    if (e.key === 'b') { e.preventDefault(); applyBold(active); }
+    if (e.key === 'i') { e.preventDefault(); applyItalic(active); }
+    if (e.key === 'u') { e.preventDefault(); applyUnderline(active); }
     if (e.key === 'z') { e.preventDefault(); performUndo(); }
+    if (e.key === 's') { e.preventDefault(); saveLocal(); }
   }
 });
 
 // ══════════════════════════════════════════
 // GIST API
 // ══════════════════════════════════════════
-
-// ── fetchGist（起動時の初期ロード専用）──
-async function fetchGist() {
-  if (!state.token || !state.gistId) { toast('Gistトークンとidを設定してください', 'warn'); return; }
-  try {
-    const gist = await fetchGistData();
-    const file = gist.files['airports.json'];
-    if (!file) throw new Error('airports.json not found in gist');
-    const gistAirports = JSON.parse(file.content);
-
-    state.airports = gistAirports;
-    const content = JSON.stringify(gistAirports, null, 2);
-    localStorage.setItem('pw3_local', content);
-    setLastSyncedAt(gist.updated_at);  // 同期日時を記録
-
-    renderList();
-    if (state.airports.length > 0 && !state.selectedId) {
-      selectAirport(state.airports[0].id);
-    } else if (state.selectedId) {
-      renderEditor();
-    }
-    toast('Gistから読み込み完了 (' + state.airports.length + ' airports)');
-    updateGistDot();
-  } catch(e) {
-    toast('Gist取得失敗: ' + e.message, 'err');
-  }
-}
 
 // ── fetchGist（起動時の初期ロード専用）──
 async function fetchGist() {
